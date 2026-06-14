@@ -1,177 +1,164 @@
-#!/bin/sh
-# ============================================================
-# VLESS + WebSocket 一键安装脚本 (兼容 sh / dash / bash)
-# 项目参考: https://github.com/233boy/sing-box
-# ============================================================
+#!/usr/bin/env bash
+#===============================================================
+#   Description: VLESS + WebSocket (no TLS) one-click installer
+#   Author: Customized from 233boy/sing-box
+#   Supported OS: Debian/Ubuntu, CentOS/RHEL, Alpine, Arch, LXC
+#===============================================================
 
-# 如果当前不是 bash，则自动切换到 bash 执行
-if [ -z "$BASH_VERSION" ]; then
-    exec bash "$0" "$@"
-    exit
+set -e
+
+# ---- Color ----
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# ---- Check root ----
+[[ $EUID -ne 0 ]] && echo -e "${RED}Error: This script must be run as root!${NC}" && exit 1
+
+# ---- Global variables ----
+SING_BOX_CONFIG="/etc/sing-box/config.json"
+SING_BOX_BIN="/usr/local/bin/sing-box"
+SERVICE_FILE="/etc/systemd/system/sing-box.service"
+INIT_SCRIPT="/etc/init.d/sing-box"
+LOG_FILE="/var/log/sing-box.log"
+
+# ---- User inputs ----
+echo -e "${GREEN}=============================${NC}"
+echo -e "${GREEN} VLESS + WS (no TLS) setup${NC}"
+echo -e "${GREEN}=============================${NC}"
+
+# Port
+read -p "Port [random 10000-50000]: " PORT
+if [[ -z "$PORT" ]]; then
+    PORT=$((RANDOM % 40001 + 10000))
+    echo -e "${YELLOW}Random port: ${PORT}${NC}"
+fi
+if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [[ "$PORT" -lt 1 ]] || [[ "$PORT" -gt 65535 ]]; then
+    echo -e "${RED}Invalid port. Using random port.${NC}"
+    PORT=$((RANDOM % 40001 + 10000))
+    echo -e "${YELLOW}Port set to ${PORT}${NC}"
 fi
 
-# ======================== 颜色定义 ========================
-red='\e[31m'
-yellow='\e[33m'
-gray='\e[90m'
-green='\e[92m'
-blue='\e[94m'
-magenta='\e[95m'
-cyan='\e[96m'
-none='\e[0m'
+# Host (domain or IP)
+while true; do
+    read -p "Domain / WS Host (required, no TLS): " HOST
+    if [[ -n "$HOST" ]]; then
+        break
+    else
+        echo -e "${RED}Host cannot be empty!${NC}"
+    fi
+done
 
-_red() { echo -e "${red}$*${none}"; }
-_yellow() { echo -e "${yellow}$*${none}"; }
-_green() { echo -e "${green}$*${none}"; }
-_cyan() { echo -e "${cyan}$*${none}"; }
-_red_bg() { echo -e "\e[41m$*\e[0m"; }
+# Path
+read -p "WebSocket path (default '/'): " WSPATH
+WSPATH=${WSPATH:-/}
+# Ensure leading slash
+[[ "$WSPATH" != /* ]] && WSPATH="/$WSPATH"
 
-is_err="$(_red_bg 错误!)"
-err() { echo -e "\n$is_err $*\n" && exit 1; }
+# Node name
+read -p "Node name (default: VLESS-WS): " NODE_NAME
+NODE_NAME=${NODE_NAME:-VLESS-WS}
 
-# ======================== 系统兼容性检测 ========================
-[ "$EUID" -ne 0 ] && err "当前非 root 用户，请使用 root 执行此脚本。"
+# ---- Generate UUID ----
+UUID=$(cat /proc/sys/kernel/random/uuid)
+echo -e "${BLUE}Generated UUID: ${UUID}${NC}"
 
-# 检测包管理器
-cmd=""
-command -v apt-get >/dev/null 2>&1 && cmd="apt-get"
-command -v yum >/dev/null 2>&1 && cmd="yum"
-command -v dnf >/dev/null 2>&1 && cmd="dnf"
-command -v zypper >/dev/null 2>&1 && cmd="zypper"
-command -v apk >/dev/null 2>&1 && cmd="apk"
-[ -z "$cmd" ] && err "此脚本仅支持 (Ubuntu/Debian/CentOS/RHEL/SUSE/Alpine) 系统。"
-
-# 检测 init 系统
-has_systemd=0
-has_openrc=0
-command -v systemctl >/dev/null 2>&1 && has_systemd=1
-command -v rc-service >/dev/null 2>&1 && has_openrc=1
-[ $has_systemd -eq 0 ] && [ $has_openrc -eq 0 ] && err "此系统缺少 (systemctl 或 rc-service)，请安装 systemd 或 OpenRC。"
-
-# 检测架构
-arch=$(uname -m)
-case "$arch" in
-    x86_64|amd64) is_arch="amd64" ;;
-    aarch64|arm64) is_arch="arm64" ;;
-    *) err "此脚本仅支持 64 位系统 (amd64/aarch64)，当前架构: $arch" ;;
-esac
-
-# 检测 wget
-command -v wget >/dev/null 2>&1 || err "请先安装 wget 后再执行此脚本。"
-
-# ======================== 交互式输入 ========================
-clear
-echo -e "${cyan}========================================${none}"
-echo -e "${green}    VLESS + WebSocket 一键安装脚本    ${none}"
-echo -e "${cyan}========================================${none}"
-echo ""
-
-# 域名
-printf "${yellow}请输入你的域名 (必填): ${none}"
-read custom_domain
-[ -z "$custom_domain" ] && err "域名不能为空，请重新运行脚本。"
-
-# 端口
-printf "${yellow}请输入监听端口 (直接回车随机 10000-50000): ${none}"
-read user_port
-if [ -z "$user_port" ]; then
-    user_port=$(( RANDOM % (50000 - 10000 + 1) + 10000 ))
-    echo -e "${green}已随机分配端口: $user_port${none}"
-fi
-# 端口校验
-case $user_port in
-    ''|*[!0-9]*) err "端口无效，请输入 1-65535 之间的数字。" ;;
-    *) [ $user_port -lt 1 ] || [ $user_port -gt 65535 ] && err "端口无效，请输入 1-65535 之间的数字。" ;;
-esac
-
-# 路径
-printf "${yellow}请输入 WebSocket 路径 (直接回车默认为空): ${none}"
-read user_path
-[ -z "$user_path" ] && user_path="/"
-
-# 节点名称
-printf "${yellow}请输入节点名称 (直接回车默认 VLESS-WS): ${none}"
-read node_name
-[ -z "$node_name" ] && node_name="VLESS-WS"
-
-# ======================== 生成 UUID ========================
-if command -v uuidgen >/dev/null 2>&1; then
-    uuid=$(uuidgen -r 2>/dev/null || uuidgen)
+# ---- Detect OS & architecture ----
+if [[ -f /etc/os-release ]]; then
+    . /etc/os-release
+    OS=$ID
 else
-    uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null)
+    OS=$(uname -s)
 fi
-[ -z "$uuid" ] && uuid=$(echo -n "$RANDOM$RANDOM$RANDOM" | md5sum | sed 's/\(..\)/\1-/g;s/-$//' 2>/dev/null)
-[ -z "$uuid" ] && err "无法生成 UUID，请手动安装 uuidgen 或检查系统。"
 
-# ======================== 获取服务器 IP ========================
-get_server_ip() {
-    ip=""
-    ip=$(curl -s4 --max-time 5 https://ip.sb 2>/dev/null)
-    [ -z "$ip" ] && ip=$(curl -s4 --max-time 5 https://api.ip.sb/ip 2>/dev/null)
-    [ -z "$ip" ] && ip=$(curl -s4 --max-time 5 https://icanhazip.com 2>/dev/null)
-    [ -z "$ip" ] && ip=$(curl -s6 --max-time 5 https://ip.sb 2>/dev/null)
-    echo "$ip"
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64|amd64) ARCH="amd64";;
+    aarch64|arm64) ARCH="arm64";;
+    armv7l|armv7) ARCH="armv7";;
+    *) echo -e "${RED}Unsupported architecture: $ARCH${NC}"; exit 1;;
+esac
+
+# ---- Install dependencies ----
+install_deps() {
+    echo -e "${YELLOW}Installing dependencies...${NC}"
+    if command -v apt >/dev/null 2>&1; then
+        apt update -y && apt install -y curl wget unzip qrencode jq
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y curl wget unzip qrencode jq
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y curl wget unzip qrencode jq
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache curl wget unzip qrencode jq
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -Syu --noconfirm curl wget unzip qrencode jq
+    else
+        echo -e "${RED}Unsupported package manager, please install curl/wget/unzip manually.${NC}"
+        exit 1
+    fi
+}
+install_deps
+
+# ---- Install sing-box ----
+install_sing_box() {
+    echo -e "${YELLOW}Installing sing-box...${NC}"
+    # Fetch latest version tag
+    LATEST=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r '.tag_name')
+    [[ -z "$LATEST" ]] && LATEST="v1.10.0"  # fallback
+    FILENAME="sing-box-${LATEST#v}-linux-${ARCH}.tar.gz"
+    URL="https://github.com/SagerNet/sing-box/releases/download/${LATEST}/${FILENAME}"
+
+    cd /tmp
+    wget -q --show-progress "$URL" || curl -L -o "$FILENAME" "$URL"
+    tar -xzf "$FILENAME"
+    cp "sing-box-${LATEST#v}-linux-${ARCH}/sing-box" "$SING_BOX_BIN"
+    chmod +x "$SING_BOX_BIN"
+    rm -rf "sing-box-${LATEST#v}-linux-${ARCH}" "$FILENAME"
+    echo -e "${GREEN}sing-box installed successfully.${NC}"
 }
 
-server_ip=$(get_server_ip)
-[ -z "$server_ip" ] && err "获取服务器 IP 失败，请检查网络连接。"
+if [[ -f "$SING_BOX_BIN" ]]; then
+    echo -e "${YELLOW}sing-box already installed, checking version...${NC}"
+    CURRENT_VER=$("$SING_BOX_BIN" version | head -1 | awk '{print $3}')
+    echo -e "Current version: ${CURRENT_VER}"
+    read -p "Reinstall/update sing-box? [y/N]: " UPD
+    if [[ "$UPD" =~ ^[Yy]$ ]]; then
+        rm -f "$SING_BOX_BIN"
+        install_sing_box
+    fi
+else
+    install_sing_box
+fi
 
-# ======================== 安装依赖 ========================
-echo -e "${yellow}[信息] 正在更新系统并安装必要依赖...${none}"
-case "$cmd" in
-    apk)
-        apk update && apk add --no-cache bash curl tar jq
-        ;;
-    *)
-        $cmd update -y
-        $cmd install -y curl tar jq
-        ;;
-esac
-
-# ======================== 下载并安装 sing-box ========================
-echo -e "${yellow}[信息] 正在下载并安装 sing-box...${none}"
-LATEST_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep tag_name | cut -d '"' -f4)
-[ -z "$LATEST_VERSION" ] && LATEST_VERSION="v1.10.4"
-DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/${LATEST_VERSION}/sing-box-${LATEST_VERSION#v}-linux-${is_arch}.tar.gz"
-
-TMP_DIR=$(mktemp -d)
-cd "$TMP_DIR" || exit
-wget --no-check-certificate -q "$DOWNLOAD_URL" || curl -L -o sing-box.tar.gz "$DOWNLOAD_URL"
-tar -xzf sing-box-*.tar.gz
-cp -f sing-box-*/sing-box /usr/local/bin/
-chmod +x /usr/local/bin/sing-box
-
-# 验证安装
-sing-box version >/dev/null 2>&1 || err "sing-box 安装失败"
-
-# ======================== 创建配置目录 ========================
+# ---- Create config ----
 mkdir -p /etc/sing-box
-mkdir -p /var/log/sing-box
-
-# ======================== 生成 config.json ========================
-cat > /etc/sing-box/config.json <<EOF
+cat > "$SING_BOX_CONFIG" <<EOF
 {
   "log": {
     "level": "info",
-    "output": "/var/log/sing-box/access.log"
+    "timestamp": true
   },
   "inbounds": [
     {
       "type": "vless",
-      "tag": "VLESS-WS-in",
+      "tag": "vless-ws-in",
       "listen": "::",
-      "listen_port": $user_port,
+      "listen_port": ${PORT},
+      "sniff": true,
+      "sniff_override_destination": false,
       "users": [
         {
-          "uuid": "$uuid",
+          "uuid": "${UUID}",
           "flow": ""
         }
       ],
       "transport": {
         "type": "ws",
-        "path": "$user_path",
+        "path": "${WSPATH}",
         "headers": {
-          "Host": "$custom_domain"
+          "Host": "${HOST}"
         }
       }
     }
@@ -189,97 +176,154 @@ cat > /etc/sing-box/config.json <<EOF
 }
 EOF
 
-# ======================== 创建服务文件 ========================
-if [ $has_systemd -eq 1 ]; then
-    cat > /etc/systemd/system/sing-box.service <<EOF
+echo -e "${GREEN}Configuration saved to ${SING_BOX_CONFIG}${NC}"
+
+# ---- Setup firewall ----
+setup_firewall() {
+    echo -e "${YELLOW}Configuring firewall...${NC}"
+    if command -v ufw >/dev/null 2>&1; then
+        ufw allow ${PORT}/tcp
+        ufw reload || true
+        echo -e "ufw rule added."
+    elif command -v firewall-cmd >/dev/null 2>&1; then
+        firewall-cmd --permanent --add-port=${PORT}/tcp
+        firewall-cmd --reload
+        echo -e "firewalld rule added."
+    elif command -v iptables >/dev/null 2>&1; then
+        iptables -I INPUT -p tcp --dport ${PORT} -j ACCEPT
+        # Save rules (distribution specific)
+        if command -v iptables-save >/dev/null 2>&1; then
+            iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        fi
+        echo -e "iptables rule added."
+    else
+        echo -e "${YELLOW}No supported firewall found. Please open port ${PORT} manually.${NC}"
+    fi
+}
+setup_firewall
+
+# ---- Init system detection & service installation ----
+setup_service() {
+    echo -e "${YELLOW}Setting up service...${NC}"
+    # Try systemd first
+    if command -v systemctl >/dev/null 2>&1; then
+        cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=Sing-Box Service
-After=network.target nss-lookup.target
+Description=sing-box Service
+After=network.target
 
 [Service]
 Type=simple
 User=root
-LimitNOFILE=infinity
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+ExecStart=${SING_BOX_BIN} run -c ${SING_BOX_CONFIG}
 Restart=on-failure
 RestartSec=10
+LimitNOFILE=102400
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload
-    systemctl enable sing-box
-    systemctl restart sing-box
-    sleep 2
-    systemctl is-active --quiet sing-box || err "sing-box 服务启动失败，请检查日志"
-elif [ $has_openrc -eq 1 ]; then
-    cat > /etc/init.d/sing-box <<'EOF'
+        systemctl daemon-reload
+        systemctl enable sing-box
+        systemctl start sing-box
+        systemctl status sing-box --no-pager
+        echo -e "${GREEN}sing-box started with systemd.${NC}"
+    elif command -v rc-update >/dev/null 2>&1; then
+        # OpenRC (Alpine / Gentoo)
+        cat > "$INIT_SCRIPT" <<EOF
 #!/sbin/openrc-run
-command="/usr/local/bin/sing-box"
-command_args="run -c /etc/sing-box/config.json"
-command_user="root"
-pidfile="/run/sing-box.pid"
+description="sing-box Service"
+command="${SING_BOX_BIN}"
+command_args="run -c ${SING_BOX_CONFIG}"
 command_background=true
-depend() {
-    need net
-}
+pidfile="/run/sing-box.pid"
 EOF
-    chmod +x /etc/init.d/sing-box
-    rc-update add sing-box default
-    rc-service sing-box restart
-    sleep 2
-    rc-service sing-box status >/dev/null 2>&1 || err "sing-box 服务启动失败，请检查日志"
+        chmod +x "$INIT_SCRIPT"
+        rc-update add sing-box default
+        rc-service sing-box start
+        echo -e "${GREEN}sing-box started with OpenRC.${NC}"
+    elif command -v service >/dev/null 2>&1; then
+        # SysVinit fallback
+        cat > "$INIT_SCRIPT" <<EOF
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          sing-box
+# Required-Start:    \$network
+# Required-Stop:     \$network
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: sing-box service
+### END INIT INFO
+case "\$1" in
+  start)
+    echo "Starting sing-box..."
+    nohup ${SING_BOX_BIN} run -c ${SING_BOX_CONFIG} > ${LOG_FILE} 2>&1 &
+    echo \$! > /var/run/sing-box.pid
+    ;;
+  stop)
+    echo "Stopping sing-box..."
+    kill \$(cat /var/run/sing-box.pid) 2>/dev/null
+    ;;
+  restart)
+    \$0 stop
+    sleep 1
+    \$0 start
+    ;;
+  *)
+    echo "Usage: \$0 {start|stop|restart}"
+    exit 1
+esac
+EOF
+        chmod +x "$INIT_SCRIPT"
+        update-rc.d sing-box defaults >/dev/null 2>&1 || chkconfig sing-box on >/dev/null 2>&1
+        service sing-box start
+        echo -e "${GREEN}sing-box started with SysV init.${NC}"
+    else
+        # No init system (e.g., minimal container), start with nohup directly
+        echo -e "${YELLOW}No init system detected. Starting sing-box in background...${NC}"
+        nohup ${SING_BOX_BIN} run -c ${SING_BOX_CONFIG} > ${LOG_FILE} 2>&1 &
+        echo $! > /var/run/sing-box.pid
+        echo -e "${GREEN}sing-box started in background (PID $(cat /var/run/sing-box.pid)).${NC}"
+        echo -e "${YELLOW}To stop: kill \$(cat /var/run/sing-box.pid)${NC}"
+    fi
+}
+setup_service
+
+# ---- Generate client info ----
+IP=$(curl -s4 ifconfig.me || curl -s ip.sb || hostname -I | awk '{print $1}')
+ENCODED_PATH=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${WSPATH}'))" 2>/dev/null || python -c "import urllib; print(urllib.quote('${WSPATH}'))" 2>/dev/null || echo "${WSPATH}" | sed 's/\//%2F/g')
+VLESS_LINK="vless://${UUID}@${IP}:${PORT}?type=ws&host=${HOST}&path=${ENCODED_PATH}#${NODE_NAME}"
+
+echo ""
+echo -e "${GREEN}==============================${NC}"
+echo -e "${GREEN}    VLESS + WS (no TLS)${NC}"
+echo -e "${GREEN}==============================${NC}"
+echo -e "Address (IP):     ${BLUE}${IP}${NC}"
+echo -e "Port:             ${BLUE}${PORT}${NC}"
+echo -e "UUID:             ${BLUE}${UUID}${NC}"
+echo -e "WS Host:          ${BLUE}${HOST}${NC}"
+echo -e "WS Path:          ${BLUE}${WSPATH}${NC}"
+echo -e "Node Name:        ${BLUE}${NODE_NAME}${NC}"
+echo ""
+echo -e "${GREEN}=== VLESS Link ===${NC}"
+echo -e "${VLESS_LINK}"
+echo ""
+
+# QR code
+if command -v qrencode >/dev/null 2>&1; then
+    echo -e "${GREEN}=== QR Code ===${NC}"
+    qrencode -t ANSIUTF8 "${VLESS_LINK}"
+    echo ""
 fi
 
-# ======================== 生成客户端链接 ========================
-encoded_path=$(echo -n "$user_path" | sed 's/\//%2F/g')
-[ "$user_path" = "/" ] && encoded_path="/"
-share_link="vless://$uuid@$server_ip:$user_port?encryption=none&security=none&type=ws&host=$custom_domain&path=$encoded_path#$node_name"
-
-# ======================== 输出结果 ========================
-echo ""
-echo -e "${green}========================================${none}"
-echo -e "${green}   🎉 VLESS+WS 节点安装成功！🎉   ${none}"
-echo -e "${green}========================================${none}"
-echo -e "${yellow}节点名称:${none}    $node_name"
-echo -e "${yellow}服务器 IP:${none}   $server_ip"
-echo -e "${yellow}端口:${none}        $user_port"
-echo -e "${yellow}UUID:${none}        $uuid"
-echo -e "${yellow}协议:${none}        vless"
-echo -e "${yellow}传输类型:${none}    ws"
-echo -e "${yellow}路径:${none}        $user_path"
-echo -e "${yellow}域名 (Host):${none} $custom_domain"
-echo -e "${yellow}TLS:${none}         无"
-echo ""
-echo -e "${cyan}---------- 分享链接 (点击导入) ----------${none}"
-echo -e "${green}$share_link${none}"
-echo ""
-echo -e "${cyan}------------ 手动配置信息 ------------${none}"
-echo -e "地址: $server_ip"
-echo -e "端口: $user_port"
-echo -e "用户ID: $uuid"
-echo -e "传输协议: ws"
-echo -e "主机名 (Host): $custom_domain"
-echo -e "路径 (Path): $user_path"
-echo -e "底层传输: tcp"
-echo -e "TLS: 关闭"
-echo ""
-if [ $has_systemd -eq 1 ]; then
-    status=$(systemctl is-active sing-box)
-    echo -e "${green}服务状态:${none} $status"
-    echo -e "${yellow}管理命令:${none}"
-    echo "  - 查看日志: journalctl -u sing-box -f"
-    echo "  - 重启服务: systemctl restart sing-box"
-    echo "  - 停止服务: systemctl stop sing-box"
+echo -e "${YELLOW}Service status command: ${NC}"
+if command -v systemctl >/dev/null 2>&1; then
+    echo "systemctl status sing-box"
+elif command -v service >/dev/null 2>&1; then
+    echo "service sing-box status"
+elif command -v rc-service >/dev/null 2>&1; then
+    echo "rc-service sing-box status"
 else
-    status=$(rc-service sing-box status | grep -q 'started' && echo "运行中" || echo "未运行")
-    echo -e "${green}服务状态:${none} $status"
-    echo -e "${yellow}管理命令:${none}"
-    echo "  - 查看日志: tail -f /var/log/sing-box/access.log"
-    echo "  - 重启服务: rc-service sing-box restart"
-    echo "  - 停止服务: rc-service sing-box stop"
+    echo "ps aux | grep sing-box"
 fi
-echo ""
-
-# 清理
-cd / && rm -rf "$TMP_DIR"
+echo -e "${GREEN}Installation finished!${NC}"
