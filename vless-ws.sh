@@ -51,9 +51,16 @@ detect_pkg_manager() {
 install_deps() {
     local deps="wget tar curl"
     case $PKG_MANAGER in
-        apk) $INSTALL_CMD $deps bash ;;
-        apt) $UPDATE_CMD && $INSTALL_CMD $deps ;;
-        yum|dnf|zypper) $UPDATE_CMD && $INSTALL_CMD $deps ;;
+        apk) 
+            $INSTALL_CMD $deps bash        # 安装原有依赖
+            $INSTALL_CMD gcompat           # 添加 gcompat 解决 glibc 兼容性问题
+            ;;
+        apt) 
+            $UPDATE_CMD && $INSTALL_CMD $deps 
+            ;;
+        yum|dnf|zypper) 
+            $UPDATE_CMD && $INSTALL_CMD $deps 
+            ;;
     esac
     command -v wget &>/dev/null || error "wget 安装失败"
     command -v tar  &>/dev/null || error "tar 安装失败"
