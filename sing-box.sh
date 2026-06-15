@@ -2,13 +2,11 @@
 #===============================================================================
 # 名称: sing-box-vless-dual.sh
 # 功能: 一键安装 sing-box，配置 VLESS Reality + VLESS WebSocket 双入站
-# 环境: 兼容 systemd / OpenRC，自动适配包管理器
-# 用法: bash sing-box-vless-dual.sh
+# 修复: Reality 密钥生成失败问题
 #===============================================================================
 
 set -e
 
-# 颜色
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -20,7 +18,7 @@ warn()  { echo -e "${YELLOW}警告:${NC} $*"; }
 info()  { echo -e "${CYAN}>>>${NC} $*"; }
 ok()    { echo -e "${GREEN}✓${NC} $*"; }
 
-# ================= 检测环境 =================
+# ================= 环境检测 =================
 
 detect_pkg_manager() {
     if command -v apk &>/dev/null; then
@@ -44,7 +42,7 @@ detect_pkg_manager() {
         INSTALL_CMD="zypper install -y"
         UPDATE_CMD="zypper refresh"
     else
-        error "不支持的包管理器，请手动安装 wget、tar、curl"
+        error "不支持的包管理器"
     fi
 }
 
@@ -52,7 +50,7 @@ install_deps() {
     local deps="wget tar curl"
     case $PKG_MANAGER in
         apk)
-            $INSTALL_CMD $deps bash gcompat   # gcompat 解决 glibc 兼容性
+            $INSTALL_CMD $deps bash gcompat
             ;;
         apt)
             $UPDATE_CMD && $INSTALL_CMD $deps
@@ -110,30 +108,42 @@ install_singbox() {
     ok "sing-box 安装完成: $(sing-box version | head -n1)"
 }
 
-# ================= 生成 Reality 密钥 =================
+# ================= 生成 Reality 密钥（修复版） =================
 
 generate_reality_keys() {
-    # sing-box 的 x25519 密钥生成
-    local key_output
-    key_output=$(sing-box generate x25519 2>/dev/null)
-    if [[ -z "$key_output" ]]; then
-        # 降级尝试：使用 xray 如果有
-        if command -v xray &>/dev/null; then
-            key_output=$(xray x25519 2>/dev/null)
-        else
-            warn "无法生成 x25519 密钥，尝试在线生成..."
-            key_output=$(curl -s https://api.xray.plus/x25519 2>/dev/null || echo "")
-        fi
+    local sb_bin="${CORE_BIN:-/usr/local/bin/sing-box}"
+    local key_output=""
+    
+    if [[ -x "$sb_bin" ]]; then
+        info "使用 sing-box 生成 x25519 密钥..."
+        key_output=$("$sb_bin" generate x25519 2>/dev/null) || true
     fi
+    
+    if [[ -z "$key_output" ]] && command -v xray &>/dev/null; then
+        warn "sing-box 生成失败，尝试使用 xray..."
+        key_output=$(xray x25519 2>/dev/null) || true
+    fi
+    
+    if [[ -z "$key_output" ]]; then
+        warn "本地生成失败，尝试在线 API..."
+        key_output=$(curl -s --max-time 5 https://api.xray.plus/x25519 2>/dev/null) || true
+    fi
+    
     PRIVATE_KEY=$(echo "$key_output" | grep -i 'private' | awk '{print $NF}')
     PUBLIC_KEY=$(echo "$key_output" | grep -i 'public' | awk '{print $NF}')
+    
     if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
-        error "Reality 密钥生成失败"
+        echo -e "${RED}错误: Reality 密钥生成失败，请手动执行以下命令并填入脚本${NC}"
+        echo "  sing-box generate x25519"
+        echo "或 xray x25519"
+        exit 1
     fi
+    
     ok "Reality 密钥对已生成"
+    ok "公钥: $PUBLIC_KEY"
 }
 
-# ================= 交互式配置收集 =================
+# ================= 配置收集 =================
 
 collect_config() {
     echo ""
@@ -144,7 +154,6 @@ collect_config() {
     DEST=${DEST:-www.cloudflare.com:443}
     read -p "serverNames (逗号分隔) [www.cloudflare.com]: " SERVER_NAMES_RAW
     SERVER_NAMES_RAW=${SERVER_NAMES_RAW:-www.cloudflare.com}
-    # 取第一个作为 sni
     SERVER_NAME_FIRST=$(echo "$SERVER_NAMES_RAW" | cut -d',' -f1)
 
     echo ""
@@ -161,7 +170,6 @@ collect_config() {
     read -p "节点备注 [VLESS-WS]: " REMARK
     REMARK=${REMARK:-VLESS-WS}
 
-    # 生成两个入站的 UUID
     UUID_REALITY=$(sing-box generate uuid)
     UUID_WS=$(sing-box generate uuid)
     ok "UUID (Reality): $UUID_REALITY"
@@ -171,7 +179,6 @@ collect_config() {
 # ================= 生成 config.json =================
 
 write_config() {
-    # 构建 serverNames JSON 数组
     IFS=',' read -ra SN_ARRAY <<< "$SERVER_NAMES_RAW"
     local server_names_json="["
     for sn in "${SN_ARRAY[@]}"; do
@@ -205,9 +212,7 @@ write_config() {
           "enabled": true,
           "dest": "$DEST",
           "private_key": "$PRIVATE_KEY",
-          "short_id": [
-            ""
-          ]
+          "short_id": [""]
         }
       }
     },
@@ -266,7 +271,7 @@ EOF
         systemctl enable sing-box
         systemctl restart sing-box
         ok "systemd 服务已启动"
-    else  # openrc
+    else
         cat > /etc/init.d/sing-box <<EOF
 #!/sbin/openrc-run
 name="sing-box"
@@ -287,7 +292,6 @@ EOF
     fi
 
     sleep 2
-    # 检查服务状态
     if [[ $INIT == "systemd" ]] && systemctl is-active --quiet sing-box; then
         ok "服务运行正常"
     elif [[ $INIT == "openrc" ]] && rc-service sing-box status | grep -q "started"; then
@@ -297,7 +301,7 @@ EOF
     fi
 }
 
-# ================= 输出节点链接 =================
+# ================= 输出链接 =================
 
 get_public_ip() {
     IPV4=$(curl -4 -s --max-time 3 https://api.ipify.org || true)
@@ -307,36 +311,29 @@ get_public_ip() {
 output_links() {
     get_public_ip
 
-    # Reality 链接
     if [[ -n "$IPV4" ]]; then
-        REALITY_V4="vless://${UUID_REALITY}@${IPV4}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME_FIRST}&fp=chrome&pbk=${PUBLIC_KEY}&type=tcp#VLESS-Reality-IPv4"
         echo ""
-        echo -e "${GREEN}========== VLESS Reality 节点 (IPv4) ==========${NC}"
-        echo "$REALITY_V4"
+        echo -e "${GREEN}========== VLESS Reality (IPv4) ==========${NC}"
+        echo "vless://${UUID_REALITY}@${IPV4}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME_FIRST}&fp=chrome&pbk=${PUBLIC_KEY}&type=tcp#VLESS-Reality-IPv4"
     fi
     if [[ -n "$IPV6" ]]; then
-        REALITY_V6="vless://${UUID_REALITY}@[${IPV6}]:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME_FIRST}&fp=chrome&pbk=${PUBLIC_KEY}&type=tcp#VLESS-Reality-IPv6"
         echo ""
-        echo -e "${GREEN}========== VLESS Reality 节点 (IPv6) ==========${NC}"
-        echo "$REALITY_V6"
+        echo -e "${GREEN}========== VLESS Reality (IPv6) ==========${NC}"
+        echo "vless://${UUID_REALITY}@[${IPV6}]:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME_FIRST}&fp=chrome&pbk=${PUBLIC_KEY}&type=tcp#VLESS-Reality-IPv6"
     fi
 
-    # WebSocket 链接
     encoded_path=$(echo -n "$WSPATH" | sed 's/ /%20/g; s/!/%21/g; s/#/%23/g; s/\$/%24/g; s/&/%26/g; s/'\''/%27/g; s/(/%28/g; s/)/%29/g; s/*/%2A/g; s/+/%2B/g; s/,/%2C/g; s/\//%2F/g; s/:/%3A/g; s/;/%3B/g; s/=/%3D/g; s/?/%3F/g; s/@/%40/g; s/\[/%5B/g; s/\]/%5D/g')
     if [[ -n "$IPV4" ]]; then
-        WS_V4="vless://${UUID_WS}@${IPV4}:${WS_PORT}?encryption=none&security=none&type=ws&host=${WS_DOMAIN}&path=${encoded_path}#${REMARK}-IPv4"
         echo ""
-        echo -e "${GREEN}========== VLESS WebSocket 节点 (IPv4) ==========${NC}"
-        echo "$WS_V4"
+        echo -e "${GREEN}========== VLESS WebSocket (IPv4) ==========${NC}"
+        echo "vless://${UUID_WS}@${IPV4}:${WS_PORT}?encryption=none&security=none&type=ws&host=${WS_DOMAIN}&path=${encoded_path}#${REMARK}-IPv4"
     fi
     if [[ -n "$IPV6" ]]; then
-        WS_V6="vless://${UUID_WS}@[${IPV6}]:${WS_PORT}?encryption=none&security=none&type=ws&host=${WS_DOMAIN}&path=${encoded_path}#${REMARK}-IPv6"
         echo ""
-        echo -e "${GREEN}========== VLESS WebSocket 节点 (IPv6) ==========${NC}"
-        echo "$WS_V6"
+        echo -e "${GREEN}========== VLESS WebSocket (IPv6) ==========${NC}"
+        echo "vless://${UUID_WS}@[${IPV6}]:${WS_PORT}?encryption=none&security=none&type=ws&host=${WS_DOMAIN}&path=${encoded_path}#${REMARK}-IPv6"
     fi
 
-    # 保存元信息供后续菜单使用
     cat > "$META_FILE" <<EOF
 REALITY_PORT="$REALITY_PORT"
 REALITY_UUID="$UUID_REALITY"
@@ -351,56 +348,42 @@ INSTALL_TIME="$(date '+%Y-%m-%d %H:%M:%S')"
 EOF
 }
 
-# ================= 管理菜单功能 =================
+# ================= 管理菜单 =================
 
 show_config() {
-    if [[ ! -f "$META_FILE" ]]; then
-        warn "未找到配置文件，请先安装"
-        return
-    fi
+    [[ ! -f "$META_FILE" ]] && warn "未找到配置文件，请先安装" && return
     source "$META_FILE"
     echo ""
     echo "========== 当前双入站配置 =========="
     echo "安装时间: $INSTALL_TIME"
-    echo "--- Reality 入站 ---"
-    echo "端口: $REALITY_PORT"
-    echo "UUID: $REALITY_UUID"
-    echo "PublicKey: $REALITY_PUBKEY"
-    echo "SNI: $REALITY_SNI"
-    echo "--- WebSocket 入站 ---"
-    echo "端口: $WS_PORT"
-    echo "UUID: $WS_UUID"
-    echo "路径: $WS_PATH"
-    echo "伪装域名: $WS_HOST"
-    echo "备注: $WS_REMARK"
-    echo
+    echo "--- Reality ---"
+    echo "端口: $REALITY_PORT | UUID: $REALITY_UUID | 公钥: $REALITY_PUBKEY | SNI: $REALITY_SNI"
+    echo "--- WebSocket ---"
+    echo "端口: $WS_PORT | UUID: $WS_UUID | 路径: $WS_PATH | 伪装域名: $WS_HOST"
     output_links
 }
 
 restart_service() {
     if [[ $INIT == "systemd" ]]; then
         systemctl restart sing-box
-        ok "服务已重启"
-    elif [[ $INIT == "openrc" ]]; then
+    else
         rc-service sing-box restart
-        ok "服务已重启"
     fi
+    ok "服务已重启"
 }
 
 stop_service() {
     if [[ $INIT == "systemd" ]]; then
         systemctl stop sing-box
-        ok "服务已停止"
-    elif [[ $INIT == "openrc" ]]; then
+    else
         rc-service sing-box stop
-        ok "服务已停止"
     fi
+    ok "服务已停止"
 }
 
 uninstall() {
-    read -p "⚠️ 将彻底删除 sing-box 与所有配置，是否继续？(y/N): " yn
+    read -p "⚠️ 彻底删除 sing-box 及配置？(y/N): " yn
     [[ ! "$yn" =~ ^[Yy]$ ]] && return
-
     stop_service
     if [[ $INIT == "systemd" ]]; then
         systemctl disable sing-box
@@ -410,19 +393,15 @@ uninstall() {
         rc-update del sing-box
         rm -f /etc/init.d/sing-box
     fi
-
     rm -rf "$CORE_DIR" "$LOG_DIR"
-    rm -f /usr/local/bin/sing-box
-    rm -f "$META_FILE"
-    ok "已彻底卸载 sing-box 双入站配置"
+    rm -f /usr/local/bin/sing-box "$META_FILE"
+    ok "已卸载"
 }
 
 self_update() {
     local script_path=$(realpath "$0")
-    curl -fsSL "https://raw.githubusercontent.com/jinqians/sing-box-vless-dual/main/sing-box-vless-dual.sh" -o "$script_path" 2>/dev/null && chmod +x "$script_path" && exec "$script_path" || error "更新失败，请检查网络"
+    curl -fsSL "https://raw.githubusercontent.com/jinqians/sing-box-vless-dual/main/sing-box-vless-dual.sh" -o "$script_path" 2>/dev/null && chmod +x "$script_path" && exec "$script_path" || error "更新失败"
 }
-
-# ================= 主菜单 =================
 
 main_menu() {
     while true; do
@@ -451,10 +430,7 @@ main_menu() {
     done
 }
 
-# ================= 主安装流程 =================
-
 install_dual() {
-    # 全局变量
     CORE_DIR="/etc/sing-box"
     CONF_DIR="$CORE_DIR/conf"
     LOG_DIR="/var/log/sing-box"
@@ -467,7 +443,7 @@ install_dual() {
     get_arch
     detect_init
     install_singbox
-    generate_reality_keys
+    generate_reality_keys   # 修复后的函数
     collect_config
     write_config
     create_service
@@ -475,11 +451,9 @@ install_dual() {
 
     echo ""
     ok "双入站安装完成！"
-    echo "管理命令: 再次运行此脚本即可进入菜单"
-    echo "配置文件: $CONFIG_JSON"
+    echo "管理命令: 再次运行此脚本"
 }
 
-# 入口
 if [[ "$1" == "install" ]] || [[ ! -f "/etc/sing-box/dual-meta.conf" ]]; then
     install_dual
 else
