@@ -1,29 +1,24 @@
 #!/usr/bin/env bash
 #===============================================================================
-# 名称: sing-box_multi_protocol_install.sh
-# 功能: 一键安装 sing-box，配置 VLESS+WS (无TLS) + Hysteria2 (TLS+端口跳跃) + VLESS+Reality
-# 环境: 兼容 systemd / OpenRC，自动适配包管理器，支持 LXC 等轻量容器
-# 用法: bash sing-box_multi_protocol_install.sh
+# 名称: sing-box_multi_inbound_install.sh
+# 功能: 一键安装 sing-box，同时配置 VLESS+WebSocket (无 TLS) 和 VLESS+Reality
+# 环境: 兼容 systemd / OpenRC，自动适配包管理器
+# 用法: bash sing-box_multi_inbound_install.sh
 #===============================================================================
 
 set -e
 
-# 颜色定义
+# 颜色
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# 辅助函数
 error() { echo -e "${RED}错误:${NC} $*" >&2; exit 1; }
-warn() { echo -e "${YELLOW}警告:${NC} $*"; }
-info() { echo -e "${CYAN}>>>${NC} $*"; }
-ok() { echo -e "${GREEN}✓${NC} $*"; }
-
-#===============================================================================
-# 检测系统环境
-#===============================================================================
+warn()  { echo -e "${YELLOW}警告:${NC} $*"; }
+info()  { echo -e "${CYAN}>>>${NC} $*"; }
+ok()    { echo -e "${GREEN}✓${NC} $*"; }
 
 # 检测包管理器
 detect_pkg_manager() {
@@ -48,29 +43,28 @@ detect_pkg_manager() {
         INSTALL_CMD="zypper install -y"
         UPDATE_CMD="zypper refresh"
     else
-        error "不支持的包管理器，请手动安装 wget、tar、curl、openssl"
+        error "不支持的包管理器，请手动安装 wget、tar、curl"
     fi
 }
 
 # 安装必要工具
 install_deps() {
-    local deps="wget tar curl openssl"
+    local deps="wget tar curl"
     case $PKG_MANAGER in
-        apk)
-            $INSTALL_CMD $deps bash
-            $INSTALL_CMD gcompat  # 添加 gcompat 解决 glibc 兼容性问题
+        apk) 
+            $INSTALL_CMD $deps bash        # 安装原有依赖
+            $INSTALL_CMD gcompat           # 添加 gcompat 解决 glibc 兼容性问题
             ;;
-        apt)
-            $UPDATE_CMD && $INSTALL_CMD $deps
+        apt) 
+            $UPDATE_CMD && $INSTALL_CMD $deps 
             ;;
-        yum|dnf|zypper)
-            $UPDATE_CMD && $INSTALL_CMD $deps
+        yum|dnf|zypper) 
+            $UPDATE_CMD && $INSTALL_CMD $deps 
             ;;
     esac
     command -v wget &>/dev/null || error "wget 安装失败"
-    command -v tar &>/dev/null || error "tar 安装失败"
+    command -v tar  &>/dev/null || error "tar 安装失败"
     command -v curl &>/dev/null || error "curl 安装失败"
-    command -v openssl &>/dev/null || error "openssl 安装失败"
 }
 
 # 检测 init 系统
@@ -88,292 +82,141 @@ detect_init() {
 # 获取系统架构
 get_arch() {
     case $(uname -m) in
-        x86_64|amd64)
-            ARCH="amd64"
-            ;;
-        aarch64|arm64)
-            ARCH="arm64"
-            ;;
-        *)
-            error "不支持的系统架构: $(uname -m)"
-            ;;
+        x86_64|amd64) ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        *) error "不支持的系统架构: $(uname -m)" ;;
     esac
     ok "系统架构: $ARCH"
 }
 
-# 检查是否为 root 用户
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        error "请以 root 权限运行此脚本"
-    fi
-}
-
-#===============================================================================
-# 获取用户自定义输入
-#===============================================================================
-
-# 获取服务器 IP
-get_server_ip() {
-    SERVER_IP=$(curl -s -4 ip.sb 2>/dev/null)
-    if [[ -z "$SERVER_IP" ]]; then
-        SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null)
-    fi
-    if [[ -z "$SERVER_IP" ]]; then
-        error "无法获取服务器 IPv4 地址"
-    fi
-    ok "服务器 IP: $SERVER_IP"
-}
-
-# 获取域名 (用于 VLESS+WS Host 和 Reality SNI)
-get_domain() {
-    read -p "$(echo -e "${CYAN}请输入域名 (用于 VLESS+WS Host 和 Reality SNI):${NC} ")" DOMAIN
-    if [[ -z "$DOMAIN" ]]; then
-        error "域名不能为空，请重新运行脚本并输入域名"
-    fi
-    ok "域名: $DOMAIN"
-}
-
-# 获取 VLESS+WS 端口
-get_vless_ws_port() {
-    read -p "$(echo -e "${CYAN}请输入 VLESS+WS 端口 (回车随机 10000-50000):${NC} ")" VLESS_WS_PORT_INPUT
-    if [[ -z "$VLESS_WS_PORT_INPUT" ]]; then
-        VLESS_WS_PORT=$(shuf -i 10000-50000 -n 1)
-    else
-        VLESS_WS_PORT="$VLESS_WS_PORT_INPUT"
-    fi
-    ok "VLESS+WS 端口: $VLESS_WS_PORT"
-}
-
-# 获取 VLESS+WS 路径
-get_vless_ws_path() {
-    read -p "$(echo -e "${CYAN}请输入 VLESS+WS 路径 (默认 /):${NC} ")" VLESS_WS_PATH_INPUT
-    if [[ -z "$VLESS_WS_PATH_INPUT" ]]; then
-        VLESS_WS_PATH="/"
-    else
-        # 确保路径以 / 开头
-        if [[ "$VLESS_WS_PATH_INPUT" != /* ]]; then
-            VLESS_WS_PATH="/$VLESS_WS_PATH_INPUT"
-        else
-            VLESS_WS_PATH="$VLESS_WS_PATH_INPUT"
-        fi
-    fi
-    ok "VLESS+WS 路径: $VLESS_WS_PATH"
-}
-
-# 获取 Hysteria2 端口范围
-get_hysteria2_ports() {
-    read -p "$(echo -e "${CYAN}请输入 Hysteria2 端口跳跃范围 (格式: 起始-结束, 例如 10000-50000, 回车随机):${NC} ")" HY2_PORTS_INPUT
-    if [[ -z "$HY2_PORTS_INPUT" ]]; then
-        START_PORT=$(shuf -i 10000-40000 -n 1)
-        END_PORT=$((START_PORT + 1000))
-        HY2_PORTS="${START_PORT}-${END_PORT}"
-    else
-        HY2_PORTS="$HY2_PORTS_INPUT"
-    fi
-    ok "Hysteria2 端口范围: $HY2_PORTS"
-}
-
-# 获取 VLESS Reality 端口
-get_vless_reality_port() {
-    read -p "$(echo -e "${CYAN}请输入 VLESS Reality 端口 (回车随机 10000-50000):${NC} ")" VLESS_REALITY_PORT_INPUT
-    if [[ -z "$VLESS_REALITY_PORT_INPUT" ]]; then
-        VLESS_REALITY_PORT=$(shuf -i 10000-50000 -n 1)
-    else
-        VLESS_REALITY_PORT="$VLESS_REALITY_PORT_INPUT"
-    fi
-    ok "VLESS Reality 端口: $VLESS_REALITY_PORT"
-}
-
-# 获取节点名称
-get_node_names() {
-    read -p "$(echo -e "${CYAN}请输入 VLESS+WS 节点名称 (默认 VLESS-WS):${NC} ")" NODE_NAME_WS
-    [[ -z "$NODE_NAME_WS" ]] && NODE_NAME_WS="VLESS-WS"
-    read -p "$(echo -e "${CYAN}请输入 Hysteria2 节点名称 (默认 Hysteria2):${NC} ")" NODE_NAME_HY2
-    [[ -z "$NODE_NAME_HY2" ]] && NODE_NAME_HY2="Hysteria2"
-    read -p "$(echo -e "${CYAN}请输入 VLESS Reality 节点名称 (默认 VLESS-Reality):${NC} ")" NODE_NAME_REALITY
-    [[ -z "$NODE_NAME_REALITY" ]] && NODE_NAME_REALITY="VLESS-Reality"
-}
-
-#===============================================================================
-# 安装 sing-box
-#===============================================================================
-
+# 下载并安装 sing-box 二进制
 install_singbox() {
-    info "正在安装 sing-box..."
-    
-    # 创建必要目录
-    mkdir -p /etc/sing-box /usr/local/etc/sing-box
-    cd /etc/sing-box
-    
-    # 获取最新版本号
     local latest_url
     latest_url=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
-    if [[ -z "$latest_url" ]]; then
-        latest_url="v1.12.1"
-        warn "无法获取最新版本，使用默认版本: $latest_url"
-    fi
-    
+    [[ -z $latest_url ]] && latest_url="v1.12.1"
     local version=${latest_url#v}
     local download_url="https://github.com/SagerNet/sing-box/releases/download/${latest_url}/sing-box-${version}-linux-${ARCH}.tar.gz"
-    
-    # 下载并解压
-    info "下载地址: $download_url"
-    wget -q --show-progress "$download_url" -O sing-box.tar.gz || error "下载 sing-box 失败"
-    tar -xzf sing-box.tar.gz
-    cp "sing-box-${version}-linux-${ARCH}/sing-box" /usr/local/bin/ || error "复制二进制文件失败"
-    chmod +x /usr/local/bin/sing-box
-    
-    # 验证安装
-    if ! /usr/local/bin/sing-box version &>/dev/null; then
-        error "sing-box 安装验证失败"
-    fi
-    
-    # 清理
-    rm -rf "sing-box-${version}-linux-${ARCH}" sing-box.tar.gz
-    
-    ok "sing-box 安装完成: $(/usr/local/bin/sing-box version | head -1)"
-}
-
-#===============================================================================
-# 生成密钥和配置
-#===============================================================================
-
-# 生成 UUID
-generate_uuid() {
-    if command -v sing-box &>/dev/null; then
-        UUID_WS=$(sing-box generate uuid)
-        UUID_REALITY=$(sing-box generate uuid)
-    else
-        # 使用 OpenSSL 生成 UUID
-        UUID_WS=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16 | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1\2\3\4-\5\6-\7\8-9a-f-\1\2\3\4\5\6\7\8/')
-        UUID_REALITY=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16 | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1\2\3\4-\5\6-\7\8-9a-f-\1\2\3\4\5\6\7\8/')
-    fi
+    info "下载 sing-box: $download_url"
+    wget --no-check-certificate -O /tmp/sing-box.tar.gz "$download_url" || error "下载失败"
+    tar -xzf /tmp/sing-box.tar.gz -C /tmp/ || error "解压失败"
+    mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR"
+    cp "/tmp/sing-box-${version}-linux-${ARCH}/sing-box" "$CORE_BIN"
+    chmod +x "$CORE_BIN"
+    rm -rf /tmp/sing-box.tar.gz "/tmp/sing-box-${version}-linux-${ARCH}"
+    ok "sing-box 安装完成: $($CORE_BIN version | head -n1)"
 }
 
 # 生成 Reality 密钥对
-generate_reality_keys() {
-    if command -v sing-box &>/dev/null; then
-        REALITY_KEYPAIR=$(sing-box generate reality-keypair)
-        REALITY_PRIVATE_KEY=$(echo "$REALITY_KEYPAIR" | grep "PrivateKey" | awk '{print $2}')
-        REALITY_PUBLIC_KEY=$(echo "$REALITY_KEYPAIR" | grep "PublicKey" | awk '{print $2}')
-    else
-        error "无法生成 Reality 密钥对，请确保 sing-box 已安装"
+generate_reality_keypair() {
+    local keypair=$($CORE_BIN generate reality-keypair)
+    PRIVATE_KEY=$(echo "$keypair" | grep "PrivateKey" | awk '{print $2}')
+    PUBLIC_KEY=$(echo "$keypair" | grep "PublicKey" | awk '{print $2}')
+    if [[ -z $PRIVATE_KEY || -z $PUBLIC_KEY ]]; then
+        error "生成 Reality 密钥对失败"
     fi
 }
 
-# 生成 Hysteria2 密码
-generate_hy2_password() {
-    HY2_PASSWORD=$(sing-box generate password 2>/dev/null || openssl rand -base64 16)
+# 交互式获取配置 (同时获取两个入站的配置)
+get_config() {
+    echo ""
+    info "请输入 VLESS+WebSocket 配置"
+    read -p "$(echo -e "${CYAN}域名 (必填):${NC} ")" DOMAIN
+    [[ -z $DOMAIN ]] && error "域名不能为空"
+    read -p "$(echo -e "${CYAN}WS 端口 (回车随机 10000-50000):${NC} ")" WS_PORT
+    if [[ -z $WS_PORT ]]; then
+        WS_PORT=$((RANDOM % 40001 + 10000))
+        ok "随机 WS 端口: $WS_PORT"
+    fi
+    read -p "$(echo -e "${CYAN}WebSocket 路径 (默认 /):${NC} ")" WSPATH
+    [[ -z $WSPATH ]] && WSPATH="/"
+    read -p "$(echo -e "${CYAN}WS 节点名称 (默认 VLESS-WS):${NC} ")" WS_REMARK
+    [[ -z $WS_REMARK ]] && WS_REMARK="VLESS-WS"
+
+    echo ""
+    info "请输入 VLESS+Reality 配置"
+    read -p "$(echo -e "${CYAN}Reality 端口 (回车随机 10000-50000，建议与 WS 不同):${NC} ")" REALITY_PORT
+    if [[ -z $REALITY_PORT ]]; then
+        REALITY_PORT=$((RANDOM % 40001 + 10000))
+        ok "随机 Reality 端口: $REALITY_PORT"
+    fi
+    read -p "$(echo -e "${CYAN}服务器地址 (IP 或域名，用于 Reality 客户端链接):${NC} ")" SERVER_ADDR
+    [[ -z $SERVER_ADDR ]] && error "服务器地址不能为空"
+    read -p "$(echo -e "${CYAN}fallback SNI (目标网站域名，如 www.microsoft.com):${NC} ")" SERVER_NAME
+    [[ -z $SERVER_NAME ]] && SERVER_NAME="www.microsoft.com"
+    read -p "$(echo -e "${CYAN}目标地址 (target，格式 host:port，默认 ${SERVER_NAME}:443):${NC} ")" TARGET
+    [[ -z $TARGET ]] && TARGET="${SERVER_NAME}:443"
+    read -p "$(echo -e "${CYAN}Reality 节点名称 (默认 VLESS-Reality):${NC} ")" REALITY_REMARK
+    [[ -z $REALITY_REMARK ]] && REALITY_REMARK="VLESS-Reality"
+
+    # 生成通用 UUID (两个入站可以使用相同或不同UUID，这里使用相同UUID)
+    UUID=$(cat /proc/sys/kernel/random/uuid)
+
+    # 生成 Reality 密钥对和 shortId
+    generate_reality_keypair
+    SHORT_ID=$(openssl rand -hex 8)
+
+    echo ""
+    ok "配置信息汇总"
+    echo "  WS 域名: $DOMAIN"
+    echo "  WS 端口: $WS_PORT"
+    echo "  WS 路径: $WSPATH"
+    echo "  Reality 端口: $REALITY_PORT"
+    echo "  Reality 服务器地址: $SERVER_ADDR"
+    echo "  Reality fallback SNI: $SERVER_NAME"
+    echo "  Reality 目标地址: $TARGET"
+    echo "  Reality 公钥: $PUBLIC_KEY"
+    echo "  Reality shortId: $SHORT_ID"
+    echo "  公共 UUID: $UUID"
 }
 
-# 生成自签名证书 (用于 Hysteria2)
-generate_self_signed_cert() {
-    local cert_dir="/etc/sing-box/certs"
-    mkdir -p "$cert_dir"
-    
-    # 生成私钥
-    openssl genrsa -out "$cert_dir/private.key" 2048 2>/dev/null
-    if [[ $? -ne 0 || ! -f "$cert_dir/private.key" ]]; then
-        error "生成私钥失败，请检查 openssl 是否正常工作"
-    fi
-    
-    # 生成自签名证书
-    openssl req -new -x509 -days 3650 -key "$cert_dir/private.key" -out "$cert_dir/cert.crt" -subj "/CN=$DOMAIN" 2>/dev/null
-    if [[ $? -ne 0 || ! -f "$cert_dir/cert.crt" ]]; then
-        error "生成证书失败"
-    fi
-    
-    ok "自签名证书已生成"
-}
-
-#===============================================================================
-# 创建配置文件
-#===============================================================================
-
-create_config() {
-    info "正在生成配置文件..."
-    
-    # 解码 URL 编码的路径
-    ENCODED_PATH=$(printf "%s" "$VLESS_WS_PATH" | sed 's/\//%2F/g')
-    
-    cat > /etc/sing-box/config.json << EOF
+# 写入 config.json (包含两个 inbounds)
+write_config() {
+    cat > "$CONFIG_JSON" <<EOF
 {
   "log": {
-    "disabled": true,
     "level": "info",
-    "output": "/dev/null",
-    "timestamp": false
-  },
-  "dns": {
-    "servers": [
-      {
-        "tag": "cloudflare",
-        "address": "1.1.1.1"
-      }
-    ]
+    "output": "$LOG_DIR/access.log",
+    "timestamp": true
   },
   "inbounds": [
     {
       "type": "vless",
-      "tag": "vless-ws-in",
+      "tag": "VLESS-WS-in",
       "listen": "::",
-      "listen_port": $VLESS_WS_PORT,
+      "listen_port": $WS_PORT,
       "users": [
         {
-          "uuid": "$UUID_WS",
+          "uuid": "$UUID",
           "flow": ""
         }
       ],
       "transport": {
         "type": "ws",
-        "path": "$VLESS_WS_PATH",
+        "path": "$WSPATH",
         "headers": {
           "Host": "$DOMAIN"
         }
       }
     },
     {
-      "type": "hysteria2",
-      "tag": "hy2-in",
-      "listen": "::",
-      "server_ports": ["$HY2_PORTS"],
-      "hop_interval": "30s",
-      "users": [
-        {
-          "password": "$HY2_PASSWORD"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "$DOMAIN",
-        "certificate_path": "/etc/sing-box/certs/cert.crt",
-        "key_path": "/etc/sing-box/certs/private.key"
-      }
-    },
-    {
       "type": "vless",
-      "tag": "vless-reality-in",
+      "tag": "VLESS-Reality-in",
       "listen": "::",
-      "listen_port": $VLESS_REALITY_PORT,
+      "listen_port": $REALITY_PORT,
       "users": [
         {
-          "uuid": "$UUID_REALITY",
+          "uuid": "$UUID",
           "flow": "xtls-rprx-vision"
         }
       ],
       "tls": {
         "enabled": true,
-        "server_name": "$DOMAIN",
+        "server_name": "$SERVER_NAME",
         "reality": {
           "enabled": true,
-          "handshake": {
-            "server": "$DOMAIN",
-            "server_port": 443
-          },
-          "private_key": "$REALITY_PRIVATE_KEY",
-          "short_id": [
-            "6ba85179e30d4fc2"
-          ]
+          "target": "$TARGET",
+          "private_key": "$PRIVATE_KEY",
+          "short_id": ["$SHORT_ID"]
         }
       }
     }
@@ -382,171 +225,113 @@ create_config() {
     {
       "type": "direct",
       "tag": "direct"
-    },
-    {
-      "type": "block",
-      "tag": "block"
-    },
-    {
-      "type": "dns",
-      "tag": "dns-out"
     }
   ]
 }
 EOF
-    
-    ok "配置文件已生成: /etc/sing-box/config.json"
+    ok "配置文件已生成: $CONFIG_JSON"
 }
 
-#===============================================================================
-# 创建 systemd / OpenRC 服务
-#===============================================================================
-
+# 创建服务 (systemd 或 openrc)
 create_service() {
-    info "正在创建服务..."
-    
-    if [ "$INIT" = "systemd" ]; then
-        cat > /etc/systemd/system/sing-box.service << EOF
+    if [[ $INIT == "systemd" ]]; then
+        cat > /lib/systemd/system/sing-box.service <<EOF
 [Unit]
-Description=sing-box service
-Documentation=https://sing-box.sagernet.org
-After=network.target nss-lookup.target
+Description=sing-box Service
+After=network.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+ExecStart=$CORE_BIN run -c $CONFIG_JSON
 Restart=on-failure
 RestartSec=5s
-LimitNOFILE=infinity
 
 [Install]
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
         systemctl enable sing-box
-        ok "systemd 服务已创建并启用开机自启"
-        
-    elif [ "$INIT" = "openrc" ]; then
-        cat > /etc/init.d/sing-box << EOF
+        systemctl start sing-box
+        ok "systemd 服务已启动"
+    else  # openrc
+        cat > /etc/init.d/sing-box <<'EOF'
 #!/sbin/openrc-run
-command="/usr/local/bin/sing-box"
-command_args="run -c /etc/sing-box/config.json"
+name="sing-box"
+description="sing-box proxy service"
+command="CORE_BIN_PLACEHOLDER"
+command_args="run -c CONFIG_JSON_PLACEHOLDER"
 command_user="root"
-pidfile="/run/sing-box.pid"
+pidfile="/run/${RC_SVCNAME}.pid"
 command_background=true
-
 depend() {
     need net
 }
 EOF
+        sed -i "s|CORE_BIN_PLACEHOLDER|$CORE_BIN|g" /etc/init.d/sing-box
+        sed -i "s|CONFIG_JSON_PLACEHOLDER|$CONFIG_JSON|g" /etc/init.d/sing-box
         chmod +x /etc/init.d/sing-box
         rc-update add sing-box default
-        ok "OpenRC 服务已创建并启用开机自启"
-    fi
-}
-
-#===============================================================================
-# 启动服务
-#===============================================================================
-
-start_service() {
-    info "正在启动 sing-box 服务..."
-    
-    if [ "$INIT" = "systemd" ]; then
-        systemctl start sing-box
-        sleep 2
-        if systemctl is-active --quiet sing-box; then
-            ok "sing-box 服务已启动"
-        else
-            error "sing-box 服务启动失败，请检查配置"
-        fi
-    elif [ "$INIT" = "openrc" ]; then
         rc-service sing-box start
-        sleep 2
-        if rc-service sing-box status | grep -q "started"; then
-            ok "sing-box 服务已启动"
-        else
-            error "sing-box 服务启动失败，请检查配置"
-        fi
+        ok "OpenRC 服务已启动"
+    fi
+
+    sleep 2
+    # 检查服务状态
+    if [[ $INIT == "systemd" ]] && systemctl is-active --quiet sing-box; then
+        ok "服务运行正常"
+    elif [[ $INIT == "openrc" ]] && rc-service sing-box status | grep -q "started"; then
+        ok "服务运行正常"
+    else
+        warn "服务可能未正常启动，请检查日志"
     fi
 }
 
-#===============================================================================
-# 生成并输出节点链接
-#===============================================================================
+# 输出两个 VLESS 链接
+output_links() {
+    # WS 链接
+    encoded_path=$(echo -n "$WSPATH" | sed 's/ /%20/g; s/!/%21/g; s/#/%23/g; s/\$/%24/g; s/&/%26/g; s/'\''/%27/g; s/(/%28/g; s/)/%29/g; s/*/%2A/g; s/+/%2B/g; s/,/%2C/g; s/\//%2F/g; s/:/%3A/g; s/;/%3B/g; s/=/%3D/g; s/?/%3F/g; s/@/%40/g; s/\[/%5B/g; s/\]/%5D/g')
+    local ws_link="vless://$UUID@$DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$DOMAIN&path=$encoded_path#$WS_REMARK"
 
-generate_links() {
-    info "正在生成节点链接..."
-    
-    # 1. VLESS+WS 链接
-    # 格式: vless://UUID@IP:PORT?encryption=none&type=ws&host=DOMAIN&path=ENCODED_PATH#节点名称
-    VLESS_WS_LINK="vless://$UUID_WS@$SERVER_IP:$VLESS_WS_PORT?encryption=none&type=ws&host=$DOMAIN&path=$ENCODED_PATH#$NODE_NAME_WS"
-    
-    # 2. Hysteria2 链接
-    # 格式: hysteria2://PASSWORD@IP:PORT?insecure=1&sni=DOMAIN&mport=PORT-RANGE#节点名称
-    # 提取端口范围的第一个和最后一个端口
-    HY2_START_PORT=$(echo "$HY2_PORTS" | cut -d'-' -f1)
-    HY2_END_PORT=$(echo "$HY2_PORTS" | cut -d'-' -f2)
-    HY2_LINK="hysteria2://$HY2_PASSWORD@$SERVER_IP:$HY2_START_PORT?insecure=1&sni=$DOMAIN&mport=$HY2_START_PORT-$HY2_END_PORT#$NODE_NAME_HY2"
-    
-    # 3. VLESS Reality 链接
-    # 格式: vless://UUID@IP:PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=DOMAIN&fp=chrome&pbk=PUBLIC_KEY&sid=6ba85179e30d4fc2#节点名称
-    VLESS_REALITY_LINK="vless://$UUID_REALITY@$SERVER_IP:$VLESS_REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$DOMAIN&fp=chrome&pbk=$REALITY_PUBLIC_KEY&sid=6ba85179e30d4fc2#$NODE_NAME_REALITY"
-    
-    # 输出链接
+    # Reality 链接
+    local reality_link="vless://$UUID@$SERVER_ADDR:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$SERVER_NAME&pbk=$PUBLIC_KEY&sid=$SHORT_ID&fp=chrome&type=tcp#$REALITY_REMARK"
+
     echo ""
-    echo "================================================================================"
-    echo -e "${GREEN}节点链接已生成，请直接复制使用：${NC}"
-    echo "================================================================================"
+    echo -e "${GREEN}=========================================${NC}"
+    echo -e "${GREEN}         VLESS+WebSocket 链接            ${NC}"
+    echo -e "${GREEN}=========================================${NC}"
+    echo -e "${CYAN}$ws_link${NC}"
     echo ""
-    echo -e "${CYAN}1. VLESS+WS (无 TLS)${NC}"
-    echo -e "${YELLOW}$VLESS_WS_LINK${NC}"
+    echo -e "${GREEN}=========================================${NC}"
+    echo -e "${GREEN}         VLESS+Reality 链接             ${NC}"
+    echo -e "${GREEN}=========================================${NC}"
+    echo -e "${CYAN}$reality_link${NC}"
     echo ""
-    echo -e "${CYAN}2. Hysteria2 (TLS + 端口跳跃)${NC}"
-    echo -e "${YELLOW}$HY2_LINK${NC}"
-    echo ""
-    echo -e "${CYAN}3. VLESS Reality${NC}"
-    echo -e "${YELLOW}$VLESS_REALITY_LINK${NC}"
-    echo ""
-    echo "================================================================================"
-    echo -e "${GREEN}安装完成！以上链接可直接导入 v2rayN、Nekobox、sing-box 等客户端使用${NC}"
-    echo "================================================================================"
+    echo -e "${YELLOW}提示: 复制对应链接到客户端即可使用${NC}"
+    echo -e "${YELLOW}提醒: Reality 私钥已保存在配置文件中，请勿泄露${NC}"
 }
 
-#===============================================================================
-# 主函数
-#===============================================================================
-
+# 主流程
 main() {
-    echo "================================================================================"
-    echo -e "${CYAN}Sing-box 多协议一键安装脚本${NC}"
-    echo "协议: VLESS+WS (无TLS) + Hysteria2 (TLS+端口跳跃) + VLESS+Reality"
-    echo "================================================================================"
-    
-    check_root
+    # 检查 root
+    [[ $EUID -ne 0 ]] && error "请以 root 用户执行（使用 sudo -i）"
+
+    # 全局变量
+    CORE_DIR="/etc/sing-box"
+    CONF_DIR="$CORE_DIR/conf"
+    LOG_DIR="/var/log/sing-box"
+    CORE_BIN="$CORE_DIR/bin/sing-box"
+    CONFIG_JSON="$CORE_DIR/config.json"
+
     detect_pkg_manager
     install_deps
-    detect_init
     get_arch
-    
-    get_server_ip
-    get_domain
-    get_vless_ws_port
-    get_vless_ws_path
-    get_hysteria2_ports
-    get_vless_reality_port
-    get_node_names
-    
+    detect_init
     install_singbox
-    generate_uuid
-    generate_hy2_password
-    generate_reality_keys
-    generate_self_signed_cert
-    create_config
-    create_service
-    start_service
-    generate_links
+    get_config          # 同时获取两个入站的配置
+    write_config        # 生成包含两个入站的 config.json
+    create_service      # 启动服务
+    output_links        # 输出两个链接
 }
 
 main "$@"
