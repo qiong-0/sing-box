@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
-# ====================================================
-# File: sing-box-manager.sh
-# Description: Sing-box 一键管理脚本
-#             支持 VLESS+WS (无 TLS)、VLESS+Reality、Hysteria2
-#             自定义域名/端口/路径/节点名
-#             生成 vless:// 链接
-#             兼容 LXC 轻量容器及主流 Linux 发行版
-# Reference: https://github.com/233boy/sing-box
-# Author: Based on 233boy's design
-# ====================================================
+#===============================================================================
+# 名称: sb.sh (sing-box 管理脚本)
+# 功能: 一键安装/管理 sing-box，支持 VLESS+WS、VLESS+Reality、Hysteria2(端口跳跃)
+# 环境: 兼容 systemd / OpenRC，自动适配包管理器，支持 LXC/OpenVZ 轻量容器
+# 用法: bash sb.sh 或 sb (安装后可使用快捷命令)
+#===============================================================================
 
 set -e
 
@@ -17,655 +13,799 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
-PLAIN='\033[0m'
+CYAN='\033[0;36m'
+NC='\033[0m'
 
-# 路径定义
-SING_BOX_BIN="/usr/local/bin/sing-box"
-SING_BOX_CONFIG_DIR="/etc/sing-box"
-SING_BOX_CONFIG="${SING_BOX_CONFIG_DIR}/config.json"
-SERVICE_FILE="/etc/systemd/system/sing-box.service"
-SB_CMD="/usr/local/bin/sb"
+# 全局变量
+CORE_DIR="/etc/sing-box"
+CONF_DIR="$CORE_DIR/conf"
+LOG_DIR="/var/log/sing-box"
+CORE_BIN="$CORE_DIR/bin/sing-box"
+MAIN_CONFIG="$CORE_DIR/config.json"
+PROTOCOLS_FILE="$CONF_DIR/protocols.conf"
+SERVICE_FILE_SYSTEMD="/etc/systemd/system/sing-box.service"
+SERVICE_FILE_OPENRC="/etc/init.d/sing-box"
 
-# ----------------------------------------
-# 通用函数
-# ----------------------------------------
+# 协议类型
+PROTOCOL_TYPES=("vless-ws" "vless-reality" "hy2")
 
-# 显示信息
-info() {
-    echo -e "${GREEN}[信息]${PLAIN} $1"
-}
+# 帮助函数
+error() { echo -e "${RED}错误:${NC} $*" >&2; exit 1; }
+warn() { echo -e "${YELLOW}警告:${NC} $*"; }
+info() { echo -e "${CYAN}>>>${NC} $*"; }
+ok() { echo -e "${GREEN}✓${NC} $*"; }
 
-err() {
-    echo -e "${RED}[错误]${PLAIN} $1" >&2
-    exit 1
-}
-
-warn() {
-    echo -e "${YELLOW}[警告]${PLAIN} $1"
+# 快捷命令创建
+create_alias() {
+    if ! grep -q "alias sb=" ~/.bashrc 2>/dev/null; then
+        echo "alias sb='bash $0'" >> ~/.bashrc
+        ok "已创建快捷命令: sb"
+    fi
+    if ! grep -q "alias sb=" ~/.bash_profile 2>/dev/null; then
+        echo "alias sb='bash $0'" >> ~/.bash_profile
+    fi
+    if ! grep -q "alias sb=" ~/.zshrc 2>/dev/null; then
+        echo "alias sb='bash $0'" >> ~/.zshrc 2>/dev/null || true
+    fi
 }
 
 # 检查 root
 check_root() {
-    [[ $EUID -ne 0 ]] && err "请使用 root 用户执行此脚本！"
+    [[ $EUID -ne 0 ]] && error "请以 root 用户执行（使用 sudo -i）"
 }
 
-# 检测系统类型
-detect_os() {
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        OS=$ID
-    else
-        OS=$(uname -s)
-    fi
-    echo "$OS"
-}
-
-# 是否为 Alpine
-is_alpine() {
-    [[ "$(detect_os)" == "alpine" ]]
-}
-
-# 安装必要依赖（包括 jq, curl, wget, tar, gzip, openssl 等）
-install_deps() {
-    info "检查并安装必要依赖..."
-    if is_alpine; then
-        apk update
-        apk add --no-cache curl wget tar gzip jq openssl coreutils libc6-compat
-    elif command -v apt &>/dev/null; then
-        apt update
-        apt install -y curl wget tar gzip jq openssl
+# 检测包管理器
+detect_pkg_manager() {
+    if command -v apk &>/dev/null; then
+        PKG_MANAGER="apk"
+        INSTALL_CMD="apk add --no-cache"
+        UPDATE_CMD="apk update"
+    elif command -v apt-get &>/dev/null; then
+        PKG_MANAGER="apt"
+        INSTALL_CMD="apt-get install -y"
+        UPDATE_CMD="apt-get update"
     elif command -v yum &>/dev/null; then
-        yum install -y curl wget tar gzip jq openssl
+        PKG_MANAGER="yum"
+        INSTALL_CMD="yum install -y"
+        UPDATE_CMD="yum makecache"
     elif command -v dnf &>/dev/null; then
-        dnf install -y curl wget tar gzip jq openssl
+        PKG_MANAGER="dnf"
+        INSTALL_CMD="dnf install -y"
+        UPDATE_CMD="dnf makecache"
+    elif command -v zypper &>/dev/null; then
+        PKG_MANAGER="zypper"
+        INSTALL_CMD="zypper install -y"
+        UPDATE_CMD="zypper refresh"
     else
-        warn "无法自动安装依赖，请手动安装 curl, wget, tar, gzip, jq, openssl"
+        error "不支持的包管理器，请手动安装 wget、tar、curl"
     fi
-    info "依赖检查完成"
 }
 
-# 生成随机端口 (10000-50000)
-random_port() {
-    local min=10000 max=50000
-    echo $((RANDOM % (max - min + 1) + min))
+# 安装必要工具
+install_deps() {
+    local deps="wget tar curl"
+    case $PKG_MANAGER in
+        apk)
+            $INSTALL_CMD $deps bash
+            $INSTALL_CMD gcompat
+            ;;
+        apt)
+            $UPDATE_CMD && $INSTALL_CMD $deps
+            ;;
+        yum|dnf|zypper)
+            $UPDATE_CMD && $INSTALL_CMD $deps
+            ;;
+    esac
+    command -v wget &>/dev/null || error "wget 安装失败"
+    command -v tar &>/dev/null || error "tar 安装失败"
+    command -v curl &>/dev/null || error "curl 安装失败"
+}
+
+# 检测 init 系统
+detect_init() {
+    if command -v systemctl &>/dev/null; then
+        INIT="systemd"
+    elif command -v rc-service &>/dev/null; then
+        INIT="openrc"
+    else
+        error "未检测到 systemd 或 OpenRC"
+    fi
+    ok "init 系统: $INIT"
+}
+
+# 获取系统架构
+get_arch() {
+    case $(uname -m) in
+        x86_64|amd64) ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        *) error "不支持的系统架构: $(uname -m)" ;;
+    esac
+    ok "系统架构: $ARCH"
+}
+
+# 下载并安装 sing-box 二进制
+install_singbox() {
+    local latest_url
+    latest_url=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
+    [[ -z $latest_url ]] && latest_url="v1.12.1"
+    local version=${latest_url#v}
+    local download_url="https://github.com/SagerNet/sing-box/releases/download/${latest_url}/sing-box-${version}-linux-${ARCH}.tar.gz"
+
+    info "下载 sing-box: $download_url"
+    wget --no-check-certificate -O /tmp/sing-box.tar.gz "$download_url" || error "下载失败"
+    tar -xzf /tmp/sing-box.tar.gz -C /tmp/ || error "解压失败"
+
+    mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR"
+    cp "/tmp/sing-box-${version}-linux-${ARCH}/sing-box" "$CORE_BIN"
+    chmod +x "$CORE_BIN"
+
+    rm -rf /tmp/sing-box.tar.gz "/tmp/sing-box-${version}-linux-${ARCH}"
+    ok "sing-box 安装完成: $($CORE_BIN version | head -n1)"
 }
 
 # 生成 UUID
-generate_uuid() {
-    if command -v sing-box &>/dev/null; then
-        sing-box generate uuid
+gen_uuid() {
+    if command -v uuidgen &>/dev/null; then
+        uuidgen
+    elif [ -f /proc/sys/kernel/random/uuid ]; then
+        cat /proc/sys/kernel/random/uuid
     else
-        cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || echo "c81e728d-9d4c-4f9d-a1fd-8e7e4f2b5c3d"
+        echo "$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")"
     fi
 }
 
-# 生成 Reality 密钥对
-generate_reality_keypair() {
-    if command -v sing-box &>/dev/null; then
-        sing-box generate reality-keypair
-    else
-        # fallback: 使用 openssl 生成 Base64 伪密钥（仅用于脚本不回显错误）
-        local priv=$(openssl rand -base64 32)
-        local pub=$(echo "$priv" | openssl base64 -d | openssl pkey -pubout -outform DER 2>/dev/null | openssl base64)
-        echo "$priv $pub"
-    fi
+# 生成随机端口（用于单端口场景，端口跳跃不再使用）
+random_port() {
+    echo $((RANDOM % 40001 + 10000))
 }
 
-# 生成 SS2022 密码 (用于 Hysteria2)
-generate_ss2022() {
-    if command -v sing-box &>/dev/null; then
-        sing-box generate ss2022
-    else
-        openssl rand -base64 32
-    fi
-}
+# 添加 VLESS+WS 协议
+add_vless_ws() {
+    echo ""
+    info "添加 VLESS+WebSocket 协议 (无 TLS)"
 
-# 获取本机 IPv4 地址
-get_ip() {
-    curl -s -4 --connect-timeout 3 "http://ip.sb" 2>/dev/null || echo "无法获取IP"
-}
+    read -p "$(echo -e "${CYAN}域名/IP (必填):${NC} ")" DOMAIN
+    [[ -z $DOMAIN ]] && error "域名/IP 不能为空"
 
-# 检查端口是否被占用
-port_in_use() {
-    local port=$1
-    if command -v ss &>/dev/null; then
-        ss -tuln | grep -q ":$port "
-    elif command -v netstat &>/dev/null; then
-        netstat -tuln | grep -q ":$port "
-    else
-        false
-    fi
-}
+    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" PORT
+    [[ -z $PORT ]] && PORT=$(random_port) && ok "随机端口: $PORT"
 
-# ----------------------------------------
-# Sing-box 安装 (兼容 LXC 轻量容器)
-# ----------------------------------------
-install_sing_box() {
-    check_root
-    install_deps
+    read -p "$(echo -e "${CYAN}WebSocket 路径 (默认 /):${NC} ")" WSPATH
+    [[ -z $WSPATH ]] && WSPATH="/"
 
-    if command -v sing-box &>/dev/null; then
-        warn "sing-box 已安装: $(sing-box version 2>&1 | head -n1)"
-        read -p "是否重新安装？(y/n): " reinstall
-        [[ "$reinstall" != "y" && "$reinstall" != "Y" ]] && return
-        uninstall_sing_box
-    fi
+    read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-WS):${NC} ")" REMARK
+    [[ -z $REMARK ]] && REMARK="VLESS-WS"
 
-    info "开始安装 sing-box ..."
+    UUID=$(gen_uuid)
+    echo ""
+    ok "配置信息: 域名=$DOMAIN, 端口=$PORT, 路径=$WSPATH, UUID=$UUID, 名称=$REMARK"
 
-    # 优先使用官方安装脚本
-    if curl -fsSL https://sing-box.app/install.sh | sh -s; then
-        info "官方安装脚本执行成功"
-    else
-        warn "官方安装失败，尝试手动下载静态二进制..."
-        manual_install_sing_box
-    fi
-
-    # 验证安装
-    if ! command -v sing-box &>/dev/null; then
-        err "sing-box 安装失败，请检查网络或手动安装"
-    fi
-    info "sing-box 安装完成: $(sing-box version 2>&1 | head -n1)"
-
-    # 创建配置目录及默认配置
-    mkdir -p "$SING_BOX_CONFIG_DIR"
-    if [[ ! -f "$SING_BOX_CONFIG" ]]; then
-        cat > "$SING_BOX_CONFIG" <<EOF
+    # 生成 JSON 配置
+    local proto_file="$CONF_DIR/vless-ws_${PORT}.json"
+    cat > "$proto_file" <<EOF
 {
-  "log": {
-    "level": "info",
-    "output": "$SING_BOX_CONFIG_DIR/sing-box.log"
-  },
-  "inbounds": [],
-  "outbounds": [
-    { "type": "direct", "tag": "direct" },
-    { "type": "block", "tag": "block" }
-  ]
+    "type": "vless",
+    "tag": "$REMARK",
+    "listen": "::",
+    "listen_port": $PORT,
+    "users": [
+        {
+            "uuid": "$UUID",
+            "flow": ""
+        }
+    ],
+    "transport": {
+        "type": "ws",
+        "path": "$WSPATH"
+    }
 }
 EOF
-    fi
 
-    # 创建 systemd 服务
-    create_systemd_service
-    systemctl daemon-reload
-    systemctl enable sing-box
-    systemctl start sing-box
-    info "sing-box 服务已启动并设置开机自启"
+    # 生成分享链接
+    encoded_path=$(echo -n "$WSPATH" | sed 's/ /%20/g; s/!/%21/g; s/#/%23/g; s/\$/%24/g; s/&/%26/g; s/'\''/%27/g; s/(/%28/g; s/)/%29/g; s/*/%2A/g; s/+/%2B/g; s/,/%2C/g; s/\//%2F/g; s/:/%3A/g; s/;/%3B/g; s/=/%3D/g; s/?/%3F/g; s/@/%40/g; s/\[/%5B/g; s/\]/%5D/g')
+    local link="vless://$UUID@$DOMAIN:$PORT?encryption=none&security=none&type=ws&path=$encoded_path&host=$DOMAIN#$REMARK"
+    echo "$link" > "$CONF_DIR/${REMARK}_link.txt"
 
-    # 创建快捷命令 sb
-    create_sb_command
-    info "管理命令: sb"
+    echo ""
+    ok "VLESS+WS 协议添加成功"
+    echo -e "${GREEN}分享链接:${NC} $link"
+    echo ""
+
+    # 写入协议记录
+    echo "vless-ws|$REMARK|$DOMAIN|$PORT|$WSPATH|$UUID" >> "$PROTOCOLS_FILE"
 }
 
-# 手动下载静态编译版本（解决 glibc/musl 兼容问题）
-manual_install_sing_box() {
-    local arch=$(uname -m)
-    local arch_map=""
-    case "$arch" in
-        x86_64)  arch_map="amd64" ;;
-        aarch64) arch_map="arm64" ;;
-        armv7l)  arch_map="armv7" ;;
-        *)       err "不支持的架构: $arch" ;;
-    esac
+# 添加 VLESS+Reality 协议
+add_vless_reality() {
+    echo ""
+    info "添加 VLESS+Reality 协议"
 
-    # 获取最新版本
-    local latest_version=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep "tag_name" | cut -d '"' -f4)
-    [[ -z "$latest_version" ]] && err "获取最新版本号失败"
-    info "最新版本: $latest_version"
+    read -p "$(echo -e "${CYAN}域名/IP (必填):${NC} ")" DOMAIN
+    [[ -z $DOMAIN ]] && error "域名/IP 不能为空"
 
-    local url="https://github.com/SagerNet/sing-box/releases/download/${latest_version}/sing-box-${latest_version}-linux-${arch_map}.tar.gz"
-    local temp_dir=$(mktemp -d)
-    cd "$temp_dir" || exit
+    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" PORT
+    [[ -z $PORT ]] && PORT=$(random_port) && ok "随机端口: $PORT"
 
-    # 带重试的下载
-    local retry=0
-    while [[ $retry -lt 3 ]]; do
-        info "下载尝试 $((retry+1))/3"
-        if wget --tries=3 --timeout=30 --retry-connrefused "$url" -O sing-box.tar.gz 2>/dev/null; then
-            if gzip -t sing-box.tar.gz 2>/dev/null; then
-                break
-            fi
+    read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-REALITY):${NC} ")" REMARK
+    [[ -z $REMARK ]] && REMARK="VLESS-REALITY"
+
+    UUID=$(gen_uuid)
+    echo ""
+    ok "配置信息: 域名=$DOMAIN, 端口=$PORT, UUID=$UUID, 名称=$REMARK"
+
+    # 生成 Reality 密钥对
+    info "正在生成 Reality 密钥对..."
+    local keypair=$($CORE_BIN generate reality-keypair)
+    local private_key=$(echo "$keypair" | grep "PrivateKey" | awk '{print $2}')
+    local public_key=$(echo "$keypair" | grep "PublicKey" | awk '{print $2}')
+
+    # 生成 shortId
+    local short_id=$(tr -dc 'a-f0-9' < /dev/urandom 2>/dev/null | head -c 16)
+    [[ -z $short_id ]] && short_id="0000000000000000"
+
+    # 获取外网 IP
+    local server_ip=$(curl -s --max-time 5 ip.sb 2>/dev/null)
+    [[ -z $server_ip ]] && server_ip="$DOMAIN"
+
+    # 生成 JSON 配置
+    local proto_file="$CONF_DIR/vless-reality_${PORT}.json"
+    cat > "$proto_file" <<EOF
+{
+    "type": "vless",
+    "tag": "$REMARK",
+    "listen": "::",
+    "listen_port": $PORT,
+    "users": [
+        {
+            "uuid": "$UUID",
+            "flow": "xtls-rprx-vision"
+        }
+    ],
+    "tls": {
+        "enabled": true,
+        "server_name": "$DOMAIN",
+        "reality": {
+            "enabled": true,
+            "handshake": {
+                "server": "$DOMAIN",
+                "server_port": 443
+            },
+            "private_key": "$private_key",
+            "short_id": ["$short_id"]
+        }
+    }
+}
+EOF
+
+    # 生成分享链接
+    local link="vless://$UUID@$server_ip:$PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$DOMAIN&pbk=$public_key&sid=$short_id#$REMARK"
+    echo "$link" > "$CONF_DIR/${REMARK}_link.txt"
+
+    echo ""
+    ok "VLESS+Reality 协议添加成功"
+    echo -e "${GREEN}分享链接:${NC} $link"
+    echo ""
+    echo -e "${YELLOW}注: 如需修改 sni，请将链接中的域名参数 ($DOMAIN) 替换为目标域名${NC}"
+    echo ""
+
+    # 写入协议记录
+    echo "vless-reality|$REMARK|$DOMAIN|$PORT|$UUID|$private_key|$public_key|$short_id" >> "$PROTOCOLS_FILE"
+}
+
+# 添加 Hysteria2 协议（端口跳跃版本，无带宽限制）
+add_hy2() {
+    echo ""
+    info "添加 Hysteria2 协议 (支持端口跳跃)"
+
+    read -p "$(echo -e "${CYAN}域名/IP (必填):${NC} ")" DOMAIN
+    [[ -z $DOMAIN ]] && error "域名/IP 不能为空"
+
+    # 输入端口跳跃范围
+    echo -e "${CYAN}端口跳跃设置:${NC}"
+    echo -e "  示例: 10000-50000 (范围)  或  10000,20000,30000 (多个单端口)  或  10000 (单端口)"
+    read -p "$(echo -e "${CYAN}请输入端口范围/端口 (回车默认 10000-50000):${NC} ")" PORTS_INPUT
+    if [[ -z $PORTS_INPUT ]]; then
+        PORTS_INPUT="10000-50000"
+        ok "使用默认端口跳跃范围: $PORTS_INPUT"
+    fi
+
+    # 验证格式（简单校验）
+    if [[ ! $PORTS_INPUT =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
+        error "端口格式错误，请使用数字、短横线范围或逗号分隔，例如 10000-20000 或 10000,20000,30000"
+    fi
+
+    # 提取起始端口（用于文件名和记录）
+    local start_port=$(echo "$PORTS_INPUT" | grep -oE '[0-9]+' | head -n1)
+    if [[ -z $start_port ]]; then
+        error "无法解析起始端口"
+    fi
+
+    read -p "$(echo -e "${CYAN}节点名称 (默认 HYSTERIA2):${NC} ")" REMARK
+    [[ -z $REMARK ]] && REMARK="HYSTERIA2"
+
+    # 生成随机密码
+    local password=$(tr -dc 'a-zA-Z0-9' < /dev/urandom 2>/dev/null | head -c 32)
+    [[ -z $password ]] && password=$(cat /proc/sys/kernel/random/uuid | tr -d '-')
+    read -p "$(echo -e "${CYAN}密码 (回车随机生成):${NC} ")" input_pass
+    [[ -n $input_pass ]] && password="$input_pass"
+
+    echo ""
+    ok "配置信息: 域名=$DOMAIN, 端口跳跃=$PORTS_INPUT, 密码=$password, 名称=$REMARK"
+
+    # 生成 JSON 配置（使用 ports 字段，支持字符串范围或数组）
+    local proto_file="$CONF_DIR/hy2_${start_port}.json"
+    # 判断 ports 输入格式，如果是纯数字范围（如 10000-50000）则直接作为字符串，否则尝试转换为数组
+    if [[ $PORTS_INPUT =~ ^[0-9]+-[0-9]+$ ]]; then
+        ports_conf="\"$PORTS_INPUT\""
+    else
+        # 支持逗号分隔的多个端口/范围，转为 JSON 数组
+        IFS=',' read -ra port_arr <<< "$PORTS_INPUT"
+        json_array="["
+        for item in "${port_arr[@]}"; do
+            json_array+="\"$item\","
+        done
+        ports_conf="${json_array%,}]"
+    fi
+
+    cat > "$proto_file" <<EOF
+{
+    "type": "hysteria2",
+    "tag": "$REMARK",
+    "listen": "::",
+    "ports": $ports_conf,
+    "users": [
+        {
+            "password": "$password"
+        }
+    ]
+}
+EOF
+
+    # 生成分享链接（带 ports 参数）
+    # 标准 hy2 链接格式：hysteria2://password@domain:first_port?ports=range#remark
+    # first_port 取起始端口（第一个端口号）
+    local first_port="$start_port"
+    # URL 编码 ports 参数（保留 - 和 ,）
+    local encoded_ports=$(echo "$PORTS_INPUT" | sed 's/,/%2C/g')
+    local link="hysteria2://$password@$DOMAIN:$first_port?ports=$encoded_ports#$REMARK"
+    echo "$link" > "$CONF_DIR/${REMARK}_link.txt"
+
+    echo ""
+    ok "Hysteria2 协议添加成功 (端口跳跃: $PORTS_INPUT)"
+    echo -e "${GREEN}分享链接:${NC} $link"
+    echo -e "${YELLOW}注: 客户端需支持 ports 参数才能使用端口跳跃，否则仅使用 $first_port 单端口${NC}"
+    echo ""
+
+    # 写入协议记录（字段: 类型|名称|域名|起始端口|密码|端口跳跃原始串）
+    echo "hy2|$REMARK|$DOMAIN|$start_port|$password|$PORTS_INPUT" >> "$PROTOCOLS_FILE"
+}
+
+# 合并所有配置生成主 config.json
+merge_configs() {
+    local configs=""
+    for conf in "$CONF_DIR"/*.json; do
+        if [ -f "$conf" ]; then
+            configs="${configs}$(cat "$conf"),"
         fi
-        rm -f sing-box.tar.gz
-        retry=$((retry+1))
-        sleep 2
     done
-    [[ ! -f sing-box.tar.gz ]] && err "下载失败"
+    configs="${configs%,}"
 
-    # 解压 (兼容 busybox tar)
-    if ! gunzip -f sing-box.tar.gz 2>/dev/null; then
-        tar -xzf sing-box.tar.gz 2>/dev/null || err "解压失败"
-    else
-        tar -xf sing-box.tar 2>/dev/null || err "解压失败"
+    if [ -z "$configs" ]; then
+        configs="[]"
     fi
 
-    # 复制二进制
-    if [[ -f "sing-box-${latest_version}-linux-${arch_map}/sing-box" ]]; then
-        cp "sing-box-${latest_version}-linux-${arch_map}/sing-box" "$SING_BOX_BIN"
-    elif [[ -f "./sing-box" ]]; then
-        cp ./sing-box "$SING_BOX_BIN"
-    else
-        err "找不到 sing-box 二进制文件"
-    fi
-    chmod +x "$SING_BOX_BIN"
-    cd - >/dev/null || exit
-    rm -rf "$temp_dir"
+    cat > "$MAIN_CONFIG" <<EOF
+{
+    "log": {
+        "disabled": true,
+        "level": "warn"
+    },
+    "inbounds": [$configs],
+    "outbounds": [
+        {
+            "type": "direct",
+            "tag": "direct"
+        },
+        {
+            "type": "block",
+            "tag": "block"
+        }
+    ]
+}
+EOF
 }
 
-# 创建 systemd 服务文件
+# 创建 systemd 服务
 create_systemd_service() {
-    cat > "$SERVICE_FILE" <<EOF
+    cat > "$SERVICE_FILE_SYSTEMD" <<EOF
 [Unit]
-Description=Sing-box Service
-After=network.target nss-lookup.target
+Description=sing-box service
+After=network.target network-online.target nss-lookup.target
+Wants=network-online.target
+
 [Service]
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
-ExecStart=$SING_BOX_BIN run -c $SING_BOX_CONFIG
-ExecReload=/bin/kill -HUP \$MAINPID
+Type=simple
+User=root
+ExecStart=$CORE_BIN run -c $MAIN_CONFIG
 Restart=on-failure
 RestartSec=10s
 LimitNOFILE=infinity
+
 [Install]
 WantedBy=multi-user.target
 EOF
+    systemctl daemon-reload
 }
 
-# 创建 sb 快捷命令 (类似 233boy 风格)
-create_sb_command() {
-    cat > "$SB_CMD" <<'EOF'
-#!/usr/bin/env bash
-# Sing-box 管理入口
-SCRIPT_URL="https://raw.githubusercontent.com/qiong-0/sing-box/main/vless-ws.sh"
-if [[ -f /usr/local/bin/sing-box-manager.sh ]]; then
-    bash /usr/local/bin/sing-box-manager.sh "$@"
-else
-    echo "脚本文件不存在，请重新安装"
-fi
-EOF
-    chmod +x "$SB_CMD"
-    # 将当前脚本自身复制到固定位置以便 sb 调用
-    cp "$0" /usr/local/bin/sing-box-manager.sh 2>/dev/null || true
-    chmod +x /usr/local/bin/sing-box-manager.sh
-}
+# 创建 OpenRC 服务
+create_openrc_service() {
+    cat > "$SERVICE_FILE_OPENRC" <<'EOF'
+#!/sbin/openrc-run
+name="sing-box"
+description="sing-box proxy service"
+command="CORE_BIN_PLACEHOLDER"
+command_args="run -c CONFIG_JSON_PLACEHOLDER"
+command_user="root"
+pidfile="/run/${RC_SVCNAME}.pid"
+command_background=true
 
-# ----------------------------------------
-# 节点添加函数 (VLESS+WS, VLESS+Reality, Hysteria2)
-# ----------------------------------------
-
-# 添加 VLESS+WS (无 TLS)
-add_vless_ws() {
-    info "添加 VLESS+WS 节点 (无 TLS)"
-    local node_name host port path
-
-    read -p "节点名称 (默认 vless-ws): " node_name
-    node_name=${node_name:-vless-ws}
-    read -p "域名 (必填，用于 WebSocket Host): " host
-    [[ -z "$host" ]] && err "域名不能为空"
-    read -p "端口 (回车随机 10000-50000): " port
-    if [[ -z "$port" ]]; then
-        port=$(random_port)
-        while port_in_use "$port"; do port=$(random_port); done
-        info "使用随机端口: $port"
-    fi
-    read -p "路径 (默认 /): " path
-    path=${path:-/}
-
-    local uuid=$(generate_uuid)
-    local inbound=$(cat <<EOF
-{
-  "type": "vless",
-  "tag": "$node_name",
-  "listen": "::",
-  "listen_port": $port,
-  "users": [
-    { "uuid": "$uuid", "flow": "" }
-  ],
-  "transport": {
-    "type": "ws",
-    "path": "$path",
-    "headers": {
-      "Host": "$host"
-    }
-  }
+depend() {
+    need net
 }
 EOF
-)
-    add_inbound "$node_name" "$inbound"
-    # 生成分享链接
-    local server=$(get_ip)
-    local link="vless://${uuid}@${server}:${port}?encryption=none&security=none&type=ws&host=${host}&path=${path}#${node_name}"
-    echo -e "${GREEN}VLESS+WS 分享链接:${PLAIN}"
-    echo "$link"
+    sed -i "s|CORE_BIN_PLACEHOLDER|$CORE_BIN|g" "$SERVICE_FILE_OPENRC"
+    sed -i "s|CONFIG_JSON_PLACEHOLDER|$MAIN_CONFIG|g" "$SERVICE_FILE_OPENRC"
+    chmod +x "$SERVICE_FILE_OPENRC"
 }
 
-# 添加 VLESS+Reality
-add_vless_reality() {
-    info "添加 VLESS+Reality 节点"
-    local node_name port sni
-    read -p "节点名称 (默认 vless-reality): " node_name
-    node_name=${node_name:-vless-reality}
-    read -p "端口 (回车随机 10000-50000): " port
-    if [[ -z "$port" ]]; then
-        port=$(random_port)
-        while port_in_use "$port"; do port=$(random_port); done
-        info "使用随机端口: $port"
-    fi
-    read -p "SNI (伪装域名，如 www.microsoft.com): " sni
-    [[ -z "$sni" ]] && err "SNI 不能为空"
-
-    local uuid=$(generate_uuid)
-    local keypair=$(generate_reality_keypair)
-    local private_key=$(echo "$keypair" | awk '{print $1}')
-    local public_key=$(echo "$keypair" | awk '{print $2}')
-    local short_id=$(openssl rand -hex 8)
-
-    local inbound=$(cat <<EOF
-{
-  "type": "vless",
-  "tag": "$node_name",
-  "listen": "::",
-  "listen_port": $port,
-  "users": [
-    { "uuid": "$uuid", "flow": "" }
-  ],
-  "tls": {
-    "enabled": true,
-    "server_name": "$sni",
-    "reality": {
-      "enabled": true,
-      "handshake": {
-        "server": "$sni",
-        "server_port": 443
-      },
-      "private_key": "$private_key",
-      "short_id": ["$short_id"]
-    },
-    "utls": {
-      "enabled": true,
-      "fingerprint": "chrome"
-    }
-  }
-}
-EOF
-)
-    add_inbound "$node_name" "$inbound"
-    local server=$(get_ip)
-    local link="vless://${uuid}@${server}:${port}?encryption=none&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp#${node_name}"
-    echo -e "${GREEN}VLESS+Reality 分享链接:${PLAIN}"
-    echo "$link"
-}
-
-# 添加 Hysteria2
-add_hysteria2() {
-    info "添加 Hysteria2 节点"
-    local node_name port password
-    read -p "节点名称 (默认 hysteria2): " node_name
-    node_name=${node_name:-hysteria2}
-    read -p "端口 (回车随机 10000-50000): " port
-    if [[ -z "$port" ]]; then
-        port=$(random_port)
-        while port_in_use "$port"; do port=$(random_port); done
-        info "使用随机端口: $port"
-    fi
-    read -p "密码 (回车随机生成): " password
-    if [[ -z "$password" ]]; then
-        password=$(generate_ss2022)
-        info "生成的密码: $password"
-    fi
-
-    local inbound=$(cat <<EOF
-{
-  "type": "hysteria2",
-  "tag": "$node_name",
-  "listen": "::",
-  "listen_port": $port,
-  "users": [
-    { "password": "$password" }
-  ],
-  "tls": {
-    "enabled": false
-  }
-}
-EOF
-)
-    add_inbound "$node_name" "$inbound"
-    local server=$(get_ip)
-    echo -e "${GREEN}Hysteria2 节点已添加${PLAIN}"
-    echo "服务器: $server"
-    echo "端口: $port"
-    echo "密码: $password"
-    echo "客户端可使用 sing-box / hysteria2 客户端连接"
-}
-
-# 通用 inbound 添加函数 (合并到 config.json)
-add_inbound() {
-    local tag=$1
-    local new_inbound=$2
-    [[ ! -f "$SING_BOX_CONFIG" ]] && init_config
-    if jq -e ".inbounds[] | select(.tag == \"$tag\")" "$SING_BOX_CONFIG" &>/dev/null; then
-        err "节点 $tag 已存在，请更换名称"
-    fi
-    local tmp=$(mktemp)
-    jq --argjson inbound "$new_inbound" '.inbounds += [$inbound]' "$SING_BOX_CONFIG" > "$tmp"
-    mv "$tmp" "$SING_BOX_CONFIG"
-    restart_sing_box
-    info "节点 $tag 已添加并生效"
-}
-
-# 初始化空配置
-init_config() {
-    mkdir -p "$SING_BOX_CONFIG_DIR"
-    cat > "$SING_BOX_CONFIG" <<EOF
-{
-  "log": {
-    "level": "info",
-    "output": "$SING_BOX_CONFIG_DIR/sing-box.log"
-  },
-  "inbounds": [],
-  "outbounds": [
-    { "type": "direct", "tag": "direct" },
-    { "type": "block", "tag": "block" }
-  ]
-}
-EOF
-}
-
-# 重启 sing-box 服务
-restart_sing_box() {
-    systemctl restart sing-box
-    sleep 1
-    if systemctl is-active sing-box &>/dev/null; then
-        info "sing-box 重启成功"
-    else
-        err "sing-box 启动失败，请检查配置"
+# 重启服务
+restart_service() {
+    merge_configs
+    if [[ $INIT == "systemd" ]]; then
+        systemctl restart sing-box
+        sleep 2
+        if systemctl is-active --quiet sing-box; then
+            ok "服务已重启"
+        else
+            warn "服务启动失败，请检查配置"
+        fi
+    elif [[ $INIT == "openrc" ]]; then
+        rc-service sing-box restart
+        sleep 2
+        if rc-service sing-box status | grep -q "started"; then
+            ok "服务已重启"
+        else
+            warn "服务启动失败，请检查配置"
+        fi
     fi
 }
 
-# ----------------------------------------
-# 管理功能 (列表、删除、链接、状态)
-# ----------------------------------------
-
-# 列出所有节点
-list_nodes() {
-    [[ ! -f "$SING_BOX_CONFIG" ]] && { warn "配置文件不存在"; return; }
-    local inbounds=$(jq -r '.inbounds[]? | "\(.tag) \(.type)"' "$SING_BOX_CONFIG" 2>/dev/null)
-    if [[ -z "$inbounds" ]]; then
-        echo "暂无节点"
-        return
+# 停止服务
+stop_service() {
+    if [[ $INIT == "systemd" ]]; then
+        systemctl stop sing-box
+    elif [[ $INIT == "openrc" ]]; then
+        rc-service sing-box stop
     fi
-    echo -e "${BLUE}========== 节点列表 ==========${PLAIN}"
-    echo -e "名称\t\t类型\t端口"
-    echo "---------------------------------"
-    while IFS= read -r line; do
-        local tag=$(echo "$line" | awk '{print $1}')
-        local typ=$(echo "$line" | awk '{print $2}')
-        local port=$(jq -r ".inbounds[] | select(.tag == \"$tag\") | .listen_port" "$SING_BOX_CONFIG" 2>/dev/null)
-        echo -e "${GREEN}$tag${PLAIN}\t\t$typ\t$port"
-    done <<< "$inbounds"
-    echo "---------------------------------"
+    ok "服务已停止"
 }
 
-# 删除节点
-delete_node() {
-    local tag=$1
-    if [[ -z "$tag" ]]; then
-        read -p "请输入要删除的节点名称: " tag
-        [[ -z "$tag" ]] && { warn "未提供名称"; return; }
+# 启动服务
+start_service() {
+    if [[ $INIT == "systemd" ]]; then
+        systemctl start sing-box
+    elif [[ $INIT == "openrc" ]]; then
+        rc-service sing-box start
     fi
-    [[ ! -f "$SING_BOX_CONFIG" ]] && { warn "配置文件不存在"; return; }
-    if ! jq -e ".inbounds[] | select(.tag == \"$tag\")" "$SING_BOX_CONFIG" &>/dev/null; then
-        warn "节点 $tag 不存在"
-        return
-    fi
-    local tmp=$(mktemp)
-    jq "del(.inbounds[] | select(.tag == \"$tag\"))" "$SING_BOX_CONFIG" > "$tmp"
-    mv "$tmp" "$SING_BOX_CONFIG"
-    restart_sing_box
-    info "节点 $tag 已删除"
-}
-
-# 生成 VLESS 链接 (根据节点类型自动识别)
-gen_link() {
-    local tag=$1
-    if [[ -z "$tag" ]]; then
-        read -p "请输入节点名称: " tag
-        [[ -z "$tag" ]] && { warn "未提供名称"; return; }
-    fi
-    local inbound=$(jq -r ".inbounds[] | select(.tag == \"$tag\")" "$SING_BOX_CONFIG" 2>/dev/null)
-    [[ -z "$inbound" ]] && { warn "节点 $tag 不存在"; return; }
-    local type=$(echo "$inbound" | jq -r '.type')
-    if [[ "$type" != "vless" ]]; then
-        warn "仅支持 VLESS 类型节点生成 vless:// 链接"
-        return
-    fi
-    local server=$(get_ip)
-    local port=$(echo "$inbound" | jq -r '.listen_port')
-    local uuid=$(echo "$inbound" | jq -r '.users[0].uuid // .uuid')
-    local is_reality=$(echo "$inbound" | jq -r '.tls.reality.enabled // false')
-    if [[ "$is_reality" == "true" ]]; then
-        local sni=$(echo "$inbound" | jq -r '.tls.server_name')
-        local pbk=$(echo "$inbound" | jq -r '.tls.reality.public_key')
-        local sid=$(echo "$inbound" | jq -r '.tls.reality.short_id[0]')
-        local link="vless://${uuid}@${server}:${port}?encryption=none&security=reality&sni=${sni}&fp=chrome&pbk=${pbk}&sid=${sid}&type=tcp#${tag}"
-    else
-        # VLESS+WS
-        local host=$(echo "$inbound" | jq -r '.transport.headers.Host // ""')
-        local path=$(echo "$inbound" | jq -r '.transport.path // "/"')
-        local link="vless://${uuid}@${server}:${port}?encryption=none&security=none&type=ws&host=${host}&path=${path}#${tag}"
-    fi
-    echo -e "${GREEN}分享链接:${PLAIN}"
-    echo "$link"
+    ok "服务已启动"
 }
 
 # 查看服务状态
-status_sb() {
-    if systemctl is-active sing-box &>/dev/null; then
-        echo -e "sing-box: ${GREEN}运行中${PLAIN}"
-    else
-        echo -e "sing-box: ${RED}未运行${PLAIN}"
+status_service() {
+    if [[ $INIT == "systemd" ]]; then
+        systemctl status sing-box --no-pager
+    elif [[ $INIT == "openrc" ]]; then
+        rc-service sing-box status
     fi
 }
 
-# 卸载
-uninstall_sing_box() {
-    warn "此操作将卸载 sing-box 并删除所有配置！"
-    read -p "确认卸载？(y/n): " confirm
-    [[ "$confirm" != "y" && "$confirm" != "Y" ]] && return
-    systemctl stop sing-box
-    systemctl disable sing-box
-    rm -f "$SING_BOX_BIN"
-    rm -rf "$SING_BOX_CONFIG_DIR"
-    rm -f "$SERVICE_FILE"
-    rm -f "$SB_CMD"
-    rm -f /usr/local/bin/sing-box-manager.sh
-    systemctl daemon-reload
-    info "sing-box 已卸载"
-}
+# 安装主流程
+do_install() {
+    info "开始安装 sing-box..."
+    mkdir -p "$CORE_DIR" "$CONF_DIR" "$LOG_DIR"
+    detect_pkg_manager
+    install_deps
+    get_arch
+    detect_init
+    install_singbox
+    create_alias
+    info "请选择要安装的协议 (可多选，空格分隔):"
+    echo "  1) VLESS+WS (无 TLS)"
+    echo "  2) VLESS+Reality"
+    echo "  3) Hysteria2 (端口跳跃)"
+    echo "  4) 全部安装"
+    read -p "请选择 [1-4，默认1]: " choice
 
-# ----------------------------------------
-# 菜单显示
-# ----------------------------------------
-show_menu() {
-    clear
-    echo -e "  ${GREEN}Sing-box 一键管理脚本${PLAIN}"
-    echo -e "  ${BLUE}=========================${PLAIN}"
-    echo -e "  ${GREEN}1.${PLAIN}  安装 sing-box"
-    echo -e "  ${GREEN}2.${PLAIN}  卸载 sing-box"
-    echo -e "  ${GREEN}3.${PLAIN}  添加节点"
-    echo -e "  ${GREEN}4.${PLAIN}  删除节点"
-    echo -e "  ${GREEN}5.${PLAIN}  查看节点列表"
-    echo -e "  ${GREEN}6.${PLAIN}  生成节点链接"
-    echo -e "  ${GREEN}7.${PLAIN}  重启 sing-box"
-    echo -e "  ${GREEN}8.${PLAIN}  查看服务状态"
-    echo -e "  ${GREEN}0.${PLAIN}  退出"
-    echo -e "  ${BLUE}=========================${PLAIN}"
-    echo -e "  当前状态: $(status_sb)"
-}
-
-add_node_menu() {
-    echo -e "  ${GREEN}请选择协议:${PLAIN}"
-    echo -e "  ${GREEN}1.${PLAIN}  VLESS+WS (无 TLS)"
-    echo -e "  ${GREEN}2.${PLAIN}  VLESS+Reality"
-    echo -e "  ${GREEN}3.${PLAIN}  Hysteria2"
-    echo -e "  ${GREEN}0.${PLAIN}  返回"
-    read -p "请输入 [0-3]: " choice
     case $choice in
+        2) add_vless_reality ;;
+        3) add_hy2 ;;
+        4)
+            add_vless_ws
+            add_vless_reality
+            add_hy2
+            ;;
+        *) add_vless_ws ;;
+    esac
+
+    merge_configs
+    if [[ $INIT == "systemd" ]]; then
+        create_systemd_service
+        systemctl enable sing-box
+        systemctl start sing-box
+        if systemctl is-active --quiet sing-box; then
+            ok "服务运行正常"
+        else
+            warn "服务可能未正常启动，请检查"
+        fi
+    elif [[ $INIT == "openrc" ]]; then
+        create_openrc_service
+        rc-update add sing-box default
+        rc-service sing-box start
+        if rc-service sing-box status | grep -q "started"; then
+            ok "服务运行正常"
+        else
+            warn "服务可能未正常启动，请检查"
+        fi
+    fi
+    echo ""
+    info "安装完成！使用 'sb' 命令打开管理菜单"
+}
+
+# 卸载 sing-box
+do_uninstall() {
+    warn "即将卸载 sing-box 及所有配置"
+    read -p "确认卸载? [y/N]: " confirm
+    [[ $confirm != "y" && $confirm != "Y" ]] && return
+
+    if [[ $INIT == "systemd" ]]; then
+        systemctl stop sing-box 2>/dev/null
+        systemctl disable sing-box 2>/dev/null
+        rm -f "$SERVICE_FILE_SYSTEMD"
+        systemctl daemon-reload
+    elif [[ $INIT == "openrc" ]]; then
+        rc-service sing-box stop 2>/dev/null
+        rc-update del sing-box default 2>/dev/null
+        rm -f "$SERVICE_FILE_OPENRC"
+    fi
+
+    rm -rf "$CORE_DIR"
+    ok "sing-box 已卸载"
+}
+
+# 查看所有节点
+list_nodes() {
+    if [ ! -f "$PROTOCOLS_FILE" ]; then
+        warn "暂无节点，请先添加协议"
+        return
+    fi
+    echo ""
+    echo -e "${CYAN}===== 节点列表 =====${NC}"
+    local i=1
+    while IFS='|' read -r type remark domain port rest; do
+        # 显示端口信息：对于 hy2 显示端口跳跃范围（如果存在第6字段）
+        if [[ "$type" == "hy2" ]]; then
+            local ports_range=$(echo "$rest" | cut -d'|' -f2)
+            [[ -z $ports_range ]] && ports_range="$port"
+            echo -e "  $i) ${GREEN}$remark${NC} | $type | $domain | 端口跳跃: $ports_range"
+        else
+            echo -e "  $i) ${GREEN}$remark${NC} | $type | $domain:$port"
+        fi
+        ((i++))
+    done < "$PROTOCOLS_FILE"
+    echo ""
+}
+
+# 查看节点详情
+show_node_detail() {
+    if [ ! -f "$PROTOCOLS_FILE" ]; then
+        warn "暂无节点"
+        return
+    fi
+    list_nodes
+    read -p "请输入节点编号: " node_num
+    local line=$(sed -n "${node_num}p" "$PROTOCOLS_FILE" 2>/dev/null)
+    if [ -z "$line" ]; then
+        warn "节点不存在"
+        return
+    fi
+    IFS='|' read -r type remark domain port other <<< "$line"
+    echo ""
+    echo -e "${CYAN}===== 节点详情 =====${NC}"
+    echo -e "  名称: ${GREEN}$remark${NC}"
+    echo -e "  类型: $type"
+    echo -e "  域名: $domain"
+    case $type in
+        vless-ws)
+            IFS='|' read -r _ _ _ _ path uuid <<< "$line"
+            echo -e "  端口: $port"
+            echo -e "  路径: $path"
+            echo -e "  UUID: $uuid"
+            ;;
+        vless-reality)
+            IFS='|' read -r _ _ _ _ uuid private_key public_key short_id <<< "$line"
+            echo -e "  端口: $port"
+            echo -e "  UUID: $uuid"
+            echo -e "  PrivateKey: $private_key"
+            echo -e "  PublicKey: $public_key"
+            echo -e "  ShortId: $short_id"
+            ;;
+        hy2)
+            IFS='|' read -r _ _ _ start_port password ports_range <<< "$line"
+            echo -e "  起始端口: $start_port"
+            echo -e "  密码: $password"
+            echo -e "  端口跳跃范围: ${ports_range:-$start_port}"
+            ;;
+    esac
+    echo ""
+}
+
+# 生成节点分享链接
+gen_share_link() {
+    if [ ! -f "$PROTOCOLS_FILE" ]; then
+        warn "暂无节点"
+        return
+    fi
+    list_nodes
+    read -p "请输入节点编号: " node_num
+    local line=$(sed -n "${node_num}p" "$PROTOCOLS_FILE" 2>/dev/null)
+    if [ -z "$line" ]; then
+        warn "节点不存在"
+        return
+    fi
+    IFS='|' read -r type remark domain port rest <<< "$line"
+
+    local link=""
+    case $type in
+        vless-ws)
+            IFS='|' read -r _ _ _ _ path uuid <<< "$line"
+            encoded_path=$(echo -n "$path" | sed 's/ /%20/g; s/!/%21/g; s/#/%23/g; s/\$/%24/g; s/&/%26/g; s/'\''/%27/g; s/(/%28/g; s/)/%29/g; s/*/%2A/g; s/+/%2B/g; s/,/%2C/g; s/\//%2F/g; s/:/%3A/g; s/;/%3B/g; s/=/%3D/g; s/?/%3F/g; s/@/%40/g; s/\[/%5B/g; s/\]/%5D/g')
+            link="vless://$uuid@$domain:$port?encryption=none&security=none&type=ws&path=$encoded_path&host=$domain#$remark"
+            ;;
+        vless-reality)
+            IFS='|' read -r _ _ _ _ uuid _ public_key short_id <<< "$line"
+            local server_ip=$(curl -s --max-time 5 ip.sb 2>/dev/null)
+            [[ -z $server_ip ]] && server_ip="$domain"
+            link="vless://$uuid@$server_ip:$port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$domain&pbk=$public_key&sid=$short_id#$remark"
+            ;;
+        hy2)
+            IFS='|' read -r _ _ _ start_port password ports_range <<< "$line"
+            [[ -z $ports_range ]] && ports_range="$start_port"
+            local encoded_ports=$(echo "$ports_range" | sed 's/,/%2C/g')
+            link="hysteria2://$password@$domain:$start_port?ports=$encoded_ports#$remark"
+            ;;
+    esac
+    echo ""
+    echo -e "${GREEN}分享链接:${NC}"
+    echo -e "${CYAN}$link${NC}"
+    echo ""
+}
+
+# 删除协议
+delete_protocol() {
+    if [ ! -f "$PROTOCOLS_FILE" ]; then
+        warn "暂无节点"
+        return
+    fi
+    list_nodes
+    read -p "请输入要删除的节点编号: " node_num
+    local line=$(sed -n "${node_num}p" "$PROTOCOLS_FILE" 2>/dev/null)
+    if [ -z "$line" ]; then
+        warn "节点不存在"
+        return
+    fi
+    IFS='|' read -r type remark domain port rest <<< "$line"
+
+    # 删除协议 JSON 配置文件
+    case $type in
+        vless-ws) rm -f "$CONF_DIR/vless-ws_${port}.json" ;;
+        vless-reality) rm -f "$CONF_DIR/vless-reality_${port}.json" ;;
+        hy2) 
+            # hy2 的文件名使用起始端口（port 字段）
+            rm -f "$CONF_DIR/hy2_${port}.json"
+            ;;
+    esac
+
+    # 删除链接文件
+    rm -f "$CONF_DIR/${remark}_link.txt"
+
+    # 从记录文件中删除
+    sed -i "${node_num}d" "$PROTOCOLS_FILE"
+
+    # 重启服务
+    restart_service
+    ok "节点 [$remark] 已删除"
+}
+
+# 主菜单
+show_menu() {
+    echo ""
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "         sing-box 管理菜单"
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "  ${GREEN}1)${NC} 安装 sing-box"
+    echo -e "  ${GREEN}2)${NC} 卸载 sing-box"
+    echo -e "  ${GREEN}3)${NC} 重启 sing-box"
+    echo -e "  ${GREEN}4)${NC} 查看 sing-box 状态"
+    echo -e "  ${GREEN}5)${NC} 增加协议"
+    echo -e "  ${GREEN}6)${NC} 删除协议"
+    echo -e "  ${GREEN}7)${NC} 查看所有节点"
+    echo -e "  ${GREEN}8)${NC} 查看节点详情"
+    echo -e "  ${GREEN}9)${NC} 生成节点分享链接"
+    echo -e "  ${GREEN}0)${NC} 退出脚本"
+    echo -e "${CYAN}========================================${NC}"
+}
+
+# 增加协议子菜单
+add_protocol_menu() {
+    echo ""
+    echo -e "${CYAN}===== 选择协议 =====${NC}"
+    echo -e "  ${GREEN}1)${NC} VLESS+WS (无 TLS)"
+    echo -e "  ${GREEN}2)${NC} VLESS+Reality"
+    echo -e "  ${GREEN}3)${NC} Hysteria2 (端口跳跃)"
+    read -p "请选择 [1-3]: " proto_choice
+    case $proto_choice in
         1) add_vless_ws ;;
         2) add_vless_reality ;;
-        3) add_hysteria2 ;;
-        0) return ;;
+        3) add_hy2 ;;
         *) warn "无效选择" ;;
     esac
+    # 如果有服务存在则重启，否则提示安装
+    if [[ -f "$CORE_BIN" ]]; then
+        restart_service
+    else
+        warn "sing-box 尚未安装，请先选择选项 1 安装"
+    fi
 }
 
-# ----------------------------------------
-# 命令行参数处理
-# ----------------------------------------
-case "$1" in
-    add)
-        add_node_menu
-        ;;
-    del)
-        delete_node "$2"
-        ;;
-    list)
-        list_nodes
-        ;;
-    link)
-        gen_link "$2"
-        ;;
-    uninstall)
-        uninstall_sing_box
-        ;;
-    restart)
-        restart_sing_box
-        ;;
-    status)
-        status_sb
-        ;;
-    *)
-        check_root
-        if [[ ! -f "$SING_BOX_BIN" ]]; then
-            install_sing_box
-        fi
-        while true; do
-            show_menu
-            read -p "请输入选项 [0-8]: " opt
-            case $opt in
-                1) install_sing_box ;;
-                2) uninstall_sing_box ;;
-                3) add_node_menu ;;
-                4) delete_node ;;
-                5) list_nodes ;;
-                6) gen_link ;;
-                7) restart_sing_box ;;
-                8) status_sb ;;
-                0) exit 0 ;;
-                *) warn "无效选项" ;;
-            esac
-            echo ""
-            read -p "按 Enter 继续..."
-        done
-        ;;
-esac
+# 主入口
+main() {
+    check_root
+    # 检测现有环境
+    detect_pkg_manager 2>/dev/null || true
+    if [[ -f "$CORE_BIN" ]]; then
+        detect_init 2>/dev/null || true
+        get_arch 2>/dev/null || true
+    fi
+
+    while true; do
+        show_menu
+        read -p "请输入选项 [0-9]: " opt
+        case $opt in
+            1) do_install ;;
+            2) do_uninstall ;;
+            3)
+                if [[ -f "$CORE_BIN" ]]; then
+                    restart_service
+                else
+                    warn "sing-box 尚未安装"
+                fi
+                ;;
+            4)
+                if [[ -f "$CORE_BIN" ]]; then
+                    status_service
+                else
+                    warn "sing-box 尚未安装"
+                fi
+                ;;
+            5) add_protocol_menu ;;
+            6) delete_protocol ;;
+            7) list_nodes ;;
+            8) show_node_detail ;;
+            9) gen_share_link ;;
+            0) echo "退出脚本"; exit 0 ;;
+            *) warn "无效选项" ;;
+        esac
+    done
+}
+
+main "$@"
