@@ -48,13 +48,13 @@ detect_pkg_manager() {
         INSTALL_CMD="zypper install -y"
         UPDATE_CMD="zypper refresh"
     else
-        error "不支持的包管理器，请手动安装 wget、tar、curl"
+        error "不支持的包管理器，请手动安装 wget、tar、curl、openssl"
     fi
 }
 
 # 安装必要工具
 install_deps() {
-    local deps="wget tar curl"
+    local deps="wget tar curl openssl"
     case $PKG_MANAGER in
         apk)
             $INSTALL_CMD $deps bash
@@ -70,6 +70,7 @@ install_deps() {
     command -v wget &>/dev/null || error "wget 安装失败"
     command -v tar &>/dev/null || error "tar 安装失败"
     command -v curl &>/dev/null || error "curl 安装失败"
+    command -v openssl &>/dev/null || error "openssl 安装失败"
 }
 
 # 检测 init 系统
@@ -271,10 +272,16 @@ generate_self_signed_cert() {
     mkdir -p "$cert_dir"
     
     # 生成私钥
-    openssl genrsa -out "$cert_dir/private.key" 2048 2>/dev/null || error "生成私钥失败"
+    openssl genrsa -out "$cert_dir/private.key" 2048 2>/dev/null
+    if [[ $? -ne 0 || ! -f "$cert_dir/private.key" ]]; then
+        error "生成私钥失败，请检查 openssl 是否正常工作"
+    fi
     
     # 生成自签名证书
-    openssl req -new -x509 -days 3650 -key "$cert_dir/private.key" -out "$cert_dir/cert.crt" -subj "/CN=$DOMAIN" 2>/dev/null || error "生成证书失败"
+    openssl req -new -x509 -days 3650 -key "$cert_dir/private.key" -out "$cert_dir/cert.crt" -subj "/CN=$DOMAIN" 2>/dev/null
+    if [[ $? -ne 0 || ! -f "$cert_dir/cert.crt" ]]; then
+        error "生成证书失败"
+    fi
     
     ok "自签名证书已生成"
 }
