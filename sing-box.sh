@@ -48,7 +48,7 @@ detect_pkg_manager() {
     fi
 }
 
-# 安装必要工具（包含 openssl 用于生成自签证书）
+# 安装必要工具
 install_deps() {
     local deps="wget tar curl openssl"
     case $PKG_MANAGER in
@@ -93,7 +93,6 @@ get_arch() {
 uninstall_old() {
     if [ -d "$CORE_DIR" ]; then
         warn "检测到已安装的 sing-box，执行卸载..."
-        # 停止服务
         if [ "$INIT" = "systemd" ]; then
             systemctl stop sing-box 2>/dev/null || true
             systemctl disable sing-box 2>/dev/null || true
@@ -125,15 +124,20 @@ install_singbox() {
     ok "sing-box 安装完成: $($CORE_BIN version | head -n1)"
 }
 
-# 生成自签证书
+# 生成自签证书（兼容旧版openssl）
 generate_cert() {
     local cert_file="$CERT_DIR/cert.pem"
     local key_file="$CERT_DIR/key.pem"
     if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
         info "生成自签 TLS 证书（有效期 10 年）..."
-        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-            -keyout "$key_file" -out "$cert_file" -days 3650 -nodes \
-            -subj "/CN=$DOMAIN" -addext "subjectAltName=DNS:$DOMAIN"
+        # 检测 openssl 是否支持 -addext
+        if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$key_file" -out "$cert_file" -days 3650 -nodes -subj "/CN=$DOMAIN" -addext "subjectAltName=DNS:$DOMAIN" 2>/dev/null; then
+            ok "证书生成完成（支持 SAN）"
+        else
+            # 降级方案：生成不含 SAN 的证书（某些旧版 openssl）
+            warn "openssl 不支持 -addext，使用不含 SAN 的证书（部分客户端可能不兼容）"
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$key_file" -out "$cert_file" -days 3650 -nodes -subj "/CN=$DOMAIN"
+        fi
         chmod 600 "$key_file" "$cert_file"
         ok "证书生成完成: $cert_file"
     else
@@ -204,7 +208,6 @@ get_config_all() {
     [[ -z $REALITY_DEST ]] && error "dest 不能为空"
     read -p "$(echo -e "${CYAN}Server Name (SNI, 默认域名 $DOMAIN):${NC} ")" REALITY_SNI
     [[ -z $REALITY_SNI ]] && REALITY_SNI="$DOMAIN"
-    # 生成 shortId (4位十六进制)
     REALITY_SID=$(openssl rand -hex 2)
 
     echo ""
@@ -215,9 +218,9 @@ get_config_all() {
     echo "  VLESS-Reality: 端口 $REALITY_PORT, 名称 $REALITY_NAME, dest $REALITY_DEST, SNI $REALITY_SNI"
 }
 
-# 生成 config.json
+# 生成 config.json（修正字段）
 write_config() {
-    # 构建 Hysteria2 的 tls 对象
+    # Hysteria2 TLS 配置
     local hy2_tls="{
         \"enabled\": true,
         \"certificate_path\": \"$CERT_FILE\",
@@ -225,11 +228,10 @@ write_config() {
         \"server_name\": \"$DOMAIN\"
     }"
 
-    # 构建 Reality 的 tls 对象
+    # Reality TLS 配置（无多余的 enabled）
     local reality_tls="{
         \"enabled\": true,
         \"reality\": {
-            \"enabled\": true,
             \"public_key\": \"$REALITY_PUB\",
             \"private_key\": \"$REALITY_PRIV\",
             \"short_id\": \"$REALITY_SID\",
@@ -267,7 +269,7 @@ write_config() {
       "listen": "::",
       "listen_port": $HY2_PORT,
       "users": [
-        { "auth_str": "$HY2_UUID" }
+        { "password": "$HY2_UUID" }
       ],
       "tls": $hy2_tls
     },
@@ -290,7 +292,7 @@ EOF
     ok "配置文件已生成: $CONFIG_JSON"
 }
 
-# 创建服务 (systemd 或 openrc)
+# 创建服务
 create_service() {
     if [[ $INIT == "systemd" ]]; then
         cat > /lib/systemd/system/sing-box.service <<EOF
@@ -341,10 +343,12 @@ EOF
         ok "服务运行正常"
     else
         warn "服务可能未正常启动，请检查日志"
+        # 输出临时错误日志（如果之前设了日志输出到 /dev/null，这里无法获取，建议调试时修改 log.output）
+        echo "您可以手动运行 '$CORE_BIN run -c $CONFIG_JSON' 查看详细错误。"
     fi
 }
 
-# URL 编码函数 (仅用于路径)
+# URL 编码
 urlencode() {
     local string="$1"
     local encoded=""
@@ -366,14 +370,12 @@ output_links() {
     echo -e "${GREEN}              VLESS 链接                ${NC}"
     echo -e "${GREEN}=========================================${NC}"
 
-    # ---------- VLESS+WS ----------
     local encoded_path=$(urlencode "$WS_PATH")
     local ws_link="vless://$WS_UUID@$DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$DOMAIN&path=$encoded_path#$WS_NAME"
     echo -e "${CYAN}VLESS+WS:${NC}"
     echo -e "$ws_link"
     echo ""
 
-    # ---------- VLESS+Reality ----------
     local reality_link="vless://$REALITY_UUID@$DOMAIN:$REALITY_PORT?encryption=none&security=reality&sni=$REALITY_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID#$REALITY_NAME"
     echo -e "${CYAN}VLESS+Reality:${NC}"
     echo -e "$reality_link"
@@ -382,7 +384,6 @@ output_links() {
     echo -e "${GREEN}=========================================${NC}"
     echo -e "${GREEN}            Hysteria2 链接              ${NC}"
     echo -e "${GREEN}=========================================${NC}"
-    # 根据是否开启跳跃给出提示（实际链接不变，客户端可自行添加 ?ports=...）
     local hy2_link="hysteria2://$HY2_UUID@$DOMAIN:$HY2_PORT?insecure=1&sni=$DOMAIN#$HY2_NAME"
     echo -e "${CYAN}Hysteria2:${NC}"
     echo -e "$hy2_link"
@@ -398,7 +399,6 @@ output_links() {
 main() {
     [[ $EUID -ne 0 ]] && error "请以 root 用户执行（使用 sudo -i）"
 
-    # 全局变量
     CORE_DIR="/etc/sing-box"
     CONF_DIR="$CORE_DIR/conf"
     LOG_DIR="/var/log/sing-box"
@@ -411,7 +411,7 @@ main() {
     install_deps
     get_arch
     detect_init
-    uninstall_old          # 先卸载旧版本
+    uninstall_old
     install_singbox
     get_config_all
     generate_cert
