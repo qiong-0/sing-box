@@ -472,6 +472,7 @@ output_links() {
     echo -e "$hy2_link"
     echo ""
     echo -e "${YELLOW}复制链接到客户端即可使用${NC}"
+    echo ""
 }
 
 main() {
