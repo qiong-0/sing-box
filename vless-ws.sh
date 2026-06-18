@@ -79,6 +79,23 @@ get_arch() {
     ok "系统架构: $ARCH"
 }
 
+uninstall_old() {
+    if [ -d "$CORE_DIR" ]; then
+        warn "检测到已安装的 sing-box，执行卸载..."
+        if [ "$INIT" = "systemd" ]; then
+            systemctl stop sing-box 2>/dev/null || true
+            systemctl disable sing-box 2>/dev/null || true
+            rm -f /lib/systemd/system/sing-box.service
+        elif [ "$INIT" = "openrc" ]; then
+            rc-service sing-box stop 2>/dev/null || true
+            rc-update del sing-box 2>/dev/null || true
+            rm -f /etc/init.d/sing-box
+        fi
+        rm -rf "$CORE_DIR" "$LOG_DIR"
+        ok "旧版本已卸载"
+    fi
+}
+
 install_singbox() {
     local latest_url
     latest_url=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
@@ -255,10 +272,12 @@ main() {
     install_deps
     get_arch
     detect_init
+    uninstall_old
     install_singbox
     get_config
     write_config
     create_service
+    get_public_ip
     output_link
 }
 
