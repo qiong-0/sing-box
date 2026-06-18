@@ -77,15 +77,6 @@ get_arch() {
     ok "系统架构: $ARCH"
 }
 
-get_public_ip() {
-    info "正在获取公网 IP ..."
-    PUBLIC_IP=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 icanhazip.com 2>/dev/null)
-    if [ -z "$PUBLIC_IP" ]; then
-        error "无法获取公网 IP，请检查网络连接或手动设置 PUBLIC_IP 变量"
-    fi
-    ok "公网 IP: $PUBLIC_IP"
-}
-
 uninstall_old() {
     if [ -d "$CORE_DIR" ]; then
         warn "检测到已安装的 sing-box，执行卸载..."
@@ -198,11 +189,11 @@ get_config_all() {
 
     echo ""
     ok "配置信息汇总"
+    echo "  SNI: $COMMON_SNI"
     echo "  WS 域名: $WS_DOMAIN"
     echo "  VLESS-WS: 端口 $WS_PORT"
     echo "  Hysteria2: 端口 $HY2_PORT, 端口跳跃: ${HY2_HOP^^}"
     echo "  VLESS-Reality: 端口 $REALITY_PORT"
-    echo "  SNI: $COMMON_SNI"
 }
 
 write_config() {
@@ -349,6 +340,15 @@ urlencode() {
     echo "$encoded"
 }
 
+get_public_ip() {
+    info "正在获取公网 IP ..."
+    PUBLIC_IP=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 icanhazip.com 2>/dev/null)
+    if [ -z "$PUBLIC_IP" ]; then
+        error "无法获取公网 IP，请检查网络连接或手动设置 PUBLIC_IP 变量"
+    fi
+    ok "公网 IP: $PUBLIC_IP"
+}
+
 output_links() {
     echo ""
     echo -e "${GREEN}节点链接：${NC}"
@@ -385,7 +385,6 @@ main() {
     detect_pkg_manager
     install_deps
     get_arch
-    get_public_ip
     detect_init
     uninstall_old
     install_singbox
@@ -394,6 +393,7 @@ main() {
     generate_reality_keys
     write_config
     create_service
+    get_public_ip
     output_links
 }
 
