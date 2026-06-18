@@ -235,19 +235,18 @@ get_public_ip() {
 
     if [ -n "$ip_v4" ] && [ -z "$ip_v6" ]; then
         PUBLIC_IP="$ip_v4"; IP_VERSION=4
-        ok "仅检测到 IPv4: $PUBLIC_IP"
+        ok "IPv4: $PUBLIC_IP"
         return 0
     fi
     if [ -z "$ip_v4" ] && [ -n "$ip_v6" ]; then
         PUBLIC_IP="$ip_v6"; IP_VERSION=6
-        ok "仅检测到 IPv6: $PUBLIC_IP"
+        ok "IPv6: $PUBLIC_IP"
         return 0
     fi
     if [ -n "$ip_v4" ] && [ -n "$ip_v6" ]; then
         echo ""
-        echo -e "${CYAN}检测到同时存在 IPv4 和 IPv6 地址${NC}"
-        echo "  IPv4: $ip_v4"
-        echo "  IPv6: $ip_v6"
+        echo "IPv4: $ip_v4"
+        echo "IPv6: $ip_v6"
         return 0
     fi
 }
