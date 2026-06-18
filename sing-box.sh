@@ -160,8 +160,7 @@ generate_reality_keys() {
 
 get_config_all() {
     echo ""
-    info "请输入 VLESS + WebSocket 使用的域名"
-    read -p "$(echo -e "${CYAN}WS 域名:${NC} ")" WS_DOMAIN
+    read -p "$(echo -e "${CYAN}请输入 VLESS + WebSocket 使用的域名:${NC} ")" WS_DOMAIN
     [[ -z $WS_DOMAIN ]] && error "WS 域名不能为空"
 
     # ---------- VLESS+WS ----------
@@ -184,7 +183,17 @@ get_config_all() {
     [[ -z $HY2_NAME ]] && HY2_NAME="HY2"
     HY2_UUID=$(cat /proc/sys/kernel/random/uuid)
     read -p "$(echo -e "${CYAN}是否开启端口跳跃？(默认n) [y/n]:${NC} ")" HY2_HOP
-    HY2_HOP=${HY2_HOP:-n}   # 默认 n
+    HY2_HOP=${HY2_HOP:-n}
+    if [[ "${HY2_HOP,,}" == "y" ]]; then
+        read -p "$(echo -e "${CYAN}端口跳跃范围 (起始-结束，默认 10000-50000):${NC} ")" HY2_PORTS
+        [[ -z $HY2_PORTS ]] && HY2_PORTS="10000-50000"
+        if [[ ! "$HY2_PORTS" =~ ^[0-9]+-[0-9]+$ ]]; then
+            warn "端口范围格式错误，使用默认 10000-50000"
+            HY2_PORTS="10000-50000"
+        fi
+    else
+        HY2_PORTS=""
+    fi
 
     # ---------- VLESS+Reality （与 Hysteria2 共用 SNI） ----------
     echo ""
@@ -367,11 +376,12 @@ output_links() {
     echo -e "$reality_link"
     echo ""
 
-    local hy2_link="hysteria2://$HY2_UUID@$PUBLIC_IP:$HY2_PORT?insecure=1&sni=$COMMON_SNI#$HY2_NAME"
-    echo -e "$hy2_link"
-    if [[ "${HY2_HOP,,}" == "y" ]]; then
-        echo -e "${YELLOW}提示: 已开启端口跳跃，客户端可添加 &ports=10000-50000${NC}"
+    local hy2_link="hysteria2://$HY2_UUID@$PUBLIC_IP:$HY2_PORT?insecure=1&sni=$COMMON_SNI"
+    if [[ "${HY2_HOP,,}" == "y" && -n "$HY2_PORTS" ]]; then
+        hy2_link="${hy2_link}&ports=$HY2_PORTS"
     fi
+    hy2_link="${hy2_link}#$HY2_NAME"
+    echo -e "$hy2_link"
     echo ""
     echo -e "${YELLOW}复制链接到客户端即可使用（自签证书需开启跳过验证）${NC}"
 }
