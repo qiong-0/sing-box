@@ -123,7 +123,7 @@ generate_cert() {
     local cert_file="$CERT_DIR/cert.pem"
     local key_file="$CERT_DIR/key.pem"
     if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
-        info "生成自签 TLS 证书（有效期 10 年）..."
+        info "生成 TLS 证书..."
         if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$key_file" -out "$cert_file" -days 3650 -nodes -subj "/CN=$DOMAIN" -addext "subjectAltName=DNS:$DOMAIN" 2>/dev/null; then
             ok "证书生成完成（含 SAN）"
         else
@@ -160,16 +160,16 @@ generate_reality_keys() {
 
 get_config_all() {
     echo ""
-    info "请输入 VLESS+WebSocket 使用的域名（用于 Host 和路径伪装）"
-    read -p "$(echo -e "${CYAN}WS 域名 (必填):${NC} ")" WS_DOMAIN
+    info "请输入 VLESS + WebSocket 使用的域名"
+    read -p "$(echo -e "${CYAN}WS 域名:${NC} ")" WS_DOMAIN
     [[ -z $WS_DOMAIN ]] && error "WS 域名不能为空"
 
     # ---------- VLESS+WS ----------
     echo ""
-    info "配置 VLESS+WebSocket (无 TLS)"
+    info "配置 VLESS + WebSocket (无 TLS)"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" WS_PORT
     [[ -z $WS_PORT ]] && WS_PORT=$((RANDOM % 40001 + 10000))
-    read -p "$(echo -e "${CYAN}WebSocket 路径 (默认 /):${NC} ")" WS_PATH
+    read -p "$(echo -e "${CYAN}路径 (默认 /):${NC} ")" WS_PATH
     [[ -z $WS_PATH ]] && WS_PATH="/"
     read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-WS):${NC} ")" WS_NAME
     [[ -z $WS_NAME ]] && WS_NAME="VLESS-WS"
@@ -177,23 +177,23 @@ get_config_all() {
 
     # ---------- Hysteria2 ----------
     echo ""
-    info "配置 Hysteria2 (自签 TLS)"
+    info "配置 Hysteria2"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" HY2_PORT
     [[ -z $HY2_PORT ]] && HY2_PORT=$((RANDOM % 40001 + 10000))
     read -p "$(echo -e "${CYAN}节点名称 (默认 HY2):${NC} ")" HY2_NAME
     [[ -z $HY2_NAME ]] && HY2_NAME="HY2"
     HY2_UUID=$(cat /proc/sys/kernel/random/uuid)
-    read -p "$(echo -e "${CYAN}是否开启端口跳跃？(客户端自行配置) [y/N]:${NC} ")" HY2_HOP
+    read -p "$(echo -e "${CYAN}是否开启端口跳跃？(默认n) [y/n]:${NC} ")" HY2_HOP
     HY2_HOP=${HY2_HOP:-n}   # 默认 n
 
     # ---------- VLESS+Reality （与 Hysteria2 共用 SNI） ----------
     echo ""
-    info "配置 VLESS+Reality 和 Hysteria2 共用的 SNI（用于 TLS 伪装）"
-    read -p "$(echo -e "${CYAN}SNI / 伪装目标 (默认 apple.com):${NC} ")" COMMON_SNI
+    info "配置 SNI（用于 TLS 伪装）"
+    read -p "$(echo -e "${CYAN}SNI (默认 apple.com):${NC} ")" COMMON_SNI
     [[ -z $COMMON_SNI ]] && COMMON_SNI="apple.com"
     
     echo ""
-    info "配置 VLESS+Reality 专用参数"
+    info "配置 VLESS + Reality"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" REALITY_PORT
     [[ -z $REALITY_PORT ]] && REALITY_PORT=$((RANDOM % 40001 + 10000))
     read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-Reality):${NC} ")" REALITY_NAME
@@ -207,11 +207,10 @@ get_config_all() {
     echo "  VLESS-WS: 端口 $WS_PORT, 路径 $WS_PATH, 名称 $WS_NAME"
     echo "  Hysteria2: 端口 $HY2_PORT, 名称 $HY2_NAME, 端口跳跃: ${HY2_HOP^^}"
     echo "  VLESS-Reality: 端口 $REALITY_PORT, 名称 $REALITY_NAME"
-    echo "  共用 SNI: $COMMON_SNI"
+    echo "  SNI: $COMMON_SNI"
 }
 
 write_config() {
-    # Hysteria2 TLS（server_name 使用共用 SNI）
     local hy2_tls="{
         \"enabled\": true,
         \"certificate_path\": \"$CERT_FILE\",
@@ -219,7 +218,6 @@ write_config() {
         \"server_name\": \"$COMMON_SNI\"
     }"
 
-    # Reality TLS（server_name 和 handshake 都使用共用 SNI）
     local reality_tls="{
         \"enabled\": true,
         \"server_name\": \"$COMMON_SNI\",
