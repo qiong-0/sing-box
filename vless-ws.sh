@@ -257,6 +257,7 @@ output_link() {
     echo -e "vless://$UUID@$DOMAIN:$PORT?encryption=none&security=none&type=ws&host=$DOMAIN&path=#vless-ws"
     echo ""
     echo -e "${YELLOW}提示: 复制上述链接到客户端即可使用${NC}"
+    echo ""
 }
 
 main() {
