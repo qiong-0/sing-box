@@ -5,7 +5,7 @@
 #       1. VLESS + WebSocket (无 TLS)
 #       2. Hysteria2 + TLS (支持端口跳跃)
 #       3. VLESS + Reality
-# 环境: 兼容 systemd / OpenRC，自动适配包管理器
+# 环境: 兼容 systemd / OpenRC，自动适配包管理器，修复所有已知问题
 # 用法: bash sing-box_multi_install.sh
 #===============================================================================
 
@@ -202,7 +202,7 @@ generate_reality_keys() {
     ok "Reality 密钥生成完成"
 }
 
-# 生成 config.json
+# 生成 config.json（修正版：无 transport 字段，自动清理 \r）
 write_config() {
     info "生成配置文件 $CONFIG_JSON"
 
@@ -265,8 +265,7 @@ write_config() {
           "private_key": "$PRIVATE_KEY",
           "short_id": ["$SHORT_ID"]
         }
-      },
-      "transport": { "type": "tcp" }
+      }
     }
   ],
   "outbounds": [
@@ -274,6 +273,9 @@ write_config() {
   ]
 }
 EOF
+
+    # 清理可能存在的 Windows 换行符（\r）
+    sed -i 's/\r$//' "$CONFIG_JSON"
     ok "配置文件已生成"
 }
 
@@ -323,12 +325,21 @@ EOF
 
     sleep 2
     # 检查服务状态
+    local status_ok=false
     if [[ $INIT == "systemd" ]] && systemctl is-active --quiet sing-box; then
-        ok "服务运行正常"
+        status_ok=true
     elif [[ $INIT == "openrc" ]] && rc-service sing-box status | grep -q "started"; then
+        status_ok=true
+    fi
+
+    if $status_ok; then
         ok "服务运行正常"
     else
-        warn "服务可能未正常启动，请检查日志"
+        warn "服务可能未正常启动，请手动检查："
+        echo "  1. 运行 $CORE_BIN run -c $CONFIG_JSON 查看错误"
+        echo "  2. 检查端口是否被占用：netstat -tulnp | grep -E '$PORT_WS|$PORT_HY2|$PORT_REAL'"
+        echo "  3. 确认证书文件存在：ls -l $CORE_DIR/cert.pem $CORE_DIR/key.pem"
+        echo "  4. 若使用 Alpine，确保已安装 gcompat"
     fi
 }
 
@@ -340,10 +351,10 @@ output_links() {
     # VLESS+WS 链接
     local link_ws="vless://$UUID_WS@$DOMAIN:$PORT_WS?encryption=none&security=none&type=ws&host=$DOMAIN&path=$encoded_path#$REMARK_WS"
 
-    # Hysteria2 链接
+    # Hysteria2 链接（仅单端口，端口跳跃由服务端处理）
     local link_hy2="hysteria2://$DOMAIN:$PORT_HY2?auth=$HY2_PASS&peer=$DOMAIN&insecure=1#$REMARK_HY2"
     if [[ $ENABLE_HOP =~ ^[Yy]$ ]]; then
-        link_hy2="$link_hy2 (端口跳跃范围: $PORT_HOP_START-$PORT_HOP_END)"
+        link_hy2="$link_hy2 (端口跳跃范围: $PORT_HOP_START-$PORT_HOP_END，客户端无需额外配置)"
     fi
 
     # VLESS+Reality 链接
