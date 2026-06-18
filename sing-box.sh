@@ -351,9 +351,9 @@ get_public_ip() {
 
 output_links() {
     echo ""
-    echo -e "${GREEN}节点链接：${NC}"
+    echo -e "${GREEN}节点链接(如果使用vless + ws + cdn 请把端口改成443(security=tls)或80(security=none))：${NC}"
     
-    local ws_link="vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=tls&type=ws&host=$WS_DOMAIN&path=#vless-ws"
+    local ws_link="vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo -e "$ws_link"
     echo ""
 
@@ -361,9 +361,9 @@ output_links() {
     echo -e "$reality_link"
     echo ""
 
-    local hy2_link="hysteria2://$UUID@$PUBLIC_IP:$HY2_PORT?insecure=1&sni=$COMMON_SNI"
+    local hy2_link="hysteria2://$UUID@$PUBLIC_IP:$HY2_PORT?security=tls&sni=$COMMON_SNI"
     if [[ "${HY2_HOP,,}" == "y" && -n "$HY2_PORTS" ]]; then
-        hy2_link="${hy2_link}&ports=$HY2_PORTS"
+        hy2_link="${hy2_link}&mport=$HY2_PORTS&ports=$HY2_PORTS"
     fi
     hy2_link="${hy2_link}#hy2"
     echo -e "$hy2_link"
