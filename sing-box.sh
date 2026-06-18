@@ -417,15 +417,57 @@ urlencode() {
 
 get_public_ip() {
     echo ""
-    curl -s ipinfo.io | grep -E '"country"|"city"' | sed -e 's/.*"country": "\(.*\)".*/国家: \1/' -e 's/.*"city": "\(.*\)".*/城市: \1/'
-
+    # ---------- 获取地理位置（优先 ipinfo.io，失败则尝试 ipip.net） ----------
+    geo_info=""
+    if command -v curl >/dev/null 2>&1; then
+        geo_info=$(curl -s4m5 -k https://ipinfo.io 2>/dev/null | grep -E '"country"|"city"' | sed -e 's/.*"country": "\(.*\)".*/国家: \1/' -e 's/.*"city": "\(.*\)".*/城市: \1/')
+    fi
+    if [ -z "$geo_info" ] && command -v wget >/dev/null 2>&1; then
+        geo_info=$(timeout 3 wget -4 --tries=2 -qO- https://myip.ipip.net/ 2>/dev/null | awk -F'来自于：' '{print $2}')
+    fi
+    [ -n "$geo_info" ] && echo -e "$geo_info" || echo "（无法获取地理位置信息）"
     echo ""
+
+    # ---------- 获取公网 IP（模仿 argosbx 的多重备用机制） ----------
     info "正在获取公网 IP ..."
     local ip_v4=""
     local ip_v6=""
-    ip_v4=$(curl -s -4 --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s -4 --connect-timeout 5 icanhazip.com 2>/dev/null)
-    ip_v6=$(curl -s -6 --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s -6 --connect-timeout 5 icanhazip.com 2>/dev/null)
-    
+    local v46url="https://icanhazip.com"
+
+    # 尝试 IPv4
+    if command -v curl >/dev/null 2>&1; then
+        ip_v4=$(curl -s4m5 -k "$v46url" 2>/dev/null)
+    fi
+    if [ -z "$ip_v4" ] && command -v wget >/dev/null 2>&1; then
+        ip_v4=$(timeout 3 wget -4 --tries=2 -qO- "$v46url" 2>/dev/null)
+    fi
+    # 如果 icanhazip 失败，改用 ifconfig.me 再试一次
+    if [ -z "$ip_v4" ] && command -v curl >/dev/null 2>&1; then
+        ip_v4=$(curl -s4m5 -k https://ifconfig.me 2>/dev/null)
+    fi
+    if [ -z "$ip_v4" ] && command -v wget >/dev/null 2>&1; then
+        ip_v4=$(timeout 3 wget -4 --tries=2 -qO- https://ifconfig.me 2>/dev/null)
+    fi
+
+    # 尝试 IPv6
+    if command -v curl >/dev/null 2>&1; then
+        ip_v6=$(curl -s6m5 -k "$v46url" 2>/dev/null)
+    fi
+    if [ -z "$ip_v6" ] && command -v wget >/dev/null 2>&1; then
+        ip_v6=$(timeout 3 wget -6 --tries=2 -qO- "$v46url" 2>/dev/null)
+    fi
+    if [ -z "$ip_v6" ] && command -v curl >/dev/null 2>&1; then
+        ip_v6=$(curl -s6m5 -k https://ifconfig.me 2>/dev/null)
+    fi
+    if [ -z "$ip_v6" ] && command -v wget >/dev/null 2>&1; then
+        ip_v6=$(timeout 3 wget -6 --tries=2 -qO- https://ifconfig.me 2>/dev/null)
+    fi
+
+    # 清理可能的换行符
+    ip_v4=$(echo "$ip_v4" | head -n1 | tr -d '\r')
+    ip_v6=$(echo "$ip_v6" | head -n1 | tr -d '\r')
+
+    # ---------- 判断结果 ----------
     if [ -n "$ip_v4" ] && [ -z "$ip_v6" ]; then
         PUBLIC_IP="$ip_v4"; IP_VERSION=4
         ok "仅检测到 IPv4: $PUBLIC_IP"
@@ -436,22 +478,35 @@ get_public_ip() {
         ok "仅检测到 IPv6: $PUBLIC_IP"
         return 0
     fi
-    if [ -z "$ip_v4" ] && [ -z "$ip_v6" ]; then
-        error "无法获取任何公网 IP（IPv4 和 IPv6 均失败）"
+    if [ -n "$ip_v4" ] && [ -n "$ip_v6" ]; then
+        # 双栈 → 用户选择
+        echo ""
+        echo -e "${CYAN}检测到同时存在 IPv4 和 IPv6 地址${NC}"
+        echo "  IPv4: $ip_v4"
+        echo "  IPv6: $ip_v6"
+        echo "  1) 使用 IPv4"
+        echo "  2) 使用 IPv6"
+        read -p "$(echo -e "${CYAN}请选择 [1-2] (默认 1):${NC} ")" IP_CHOICE
+        case "$IP_CHOICE" in
+            2) PUBLIC_IP="$ip_v6"; IP_VERSION=6; ok "选择 IPv6: $PUBLIC_IP" ;;
+            *) PUBLIC_IP="$ip_v4"; IP_VERSION=4; ok "选择 IPv4: $PUBLIC_IP" ;;
+        esac
+        return 0
     fi
-    
-    # 双栈 → 让用户选择
-    echo ""
-    echo -e "${CYAN}检测到同时存在 IPv4 和 IPv6 地址${NC}"
-    echo "  IPv4: $ip_v4"
-    echo "  IPv6: $ip_v6"
-    echo "  1) 使用 IPv4"
-    echo "  2) 使用 IPv6"
-    read -p "$(echo -e "${CYAN}请选择 [1-2] (默认 1):${NC} ")" IP_CHOICE
-    case "$IP_CHOICE" in
-        2) PUBLIC_IP="$ip_v6"; IP_VERSION=6; ok "选择 IPv6: $PUBLIC_IP" ;;
-        *) PUBLIC_IP="$ip_v4"; IP_VERSION=4; ok "选择 IPv4: $PUBLIC_IP" ;;
-    esac
+
+    # 全部失败 → 手动输入
+    warn "所有自动获取方式均失败，请手动输入公网 IP"
+    read -p "$(echo -e "${CYAN}请输入公网 IP:${NC} ")" PUBLIC_IP
+    if [ -z "$PUBLIC_IP" ]; then
+        error "未输入 IP，无法继续"
+    fi
+    # 简单判断版本
+    if [[ "$PUBLIC_IP" =~ : ]]; then
+        IP_VERSION=6
+    else
+        IP_VERSION=4
+    fi
+    ok "使用手动输入的 IP: $PUBLIC_IP"
 }
 
 output_links() {
