@@ -77,6 +77,15 @@ get_arch() {
     ok "系统架构: $ARCH"
 }
 
+get_public_ip() {
+    info "正在获取公网 IP ..."
+    PUBLIC_IP=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 icanhazip.com 2>/dev/null)
+    if [ -z "$PUBLIC_IP" ]; then
+        error "无法获取公网 IP，请检查网络连接或手动设置 PUBLIC_IP 变量"
+    fi
+    ok "公网 IP: $PUBLIC_IP"
+}
+
 uninstall_old() {
     if [ -d "$CORE_DIR" ]; then
         warn "检测到已安装的 sing-box，执行卸载..."
@@ -151,10 +160,11 @@ generate_reality_keys() {
 
 get_config_all() {
     echo ""
-    info "请输入公共域名（用于所有协议）"
+    info "请输入公共域名（用于 VLESS+WS 和 Hysteria2 的 host/SNI）"
     read -p "$(echo -e "${CYAN}域名 (必填):${NC} ")" DOMAIN
     [[ -z $DOMAIN ]] && error "域名不能为空"
 
+    # ---------- VLESS+WS ----------
     echo ""
     info "配置 VLESS+WebSocket (无 TLS)"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" WS_PORT
@@ -165,6 +175,7 @@ get_config_all() {
     [[ -z $WS_NAME ]] && WS_NAME="VLESS-WS"
     WS_UUID=$(cat /proc/sys/kernel/random/uuid)
 
+    # ---------- Hysteria2 ----------
     echo ""
     info "配置 Hysteria2 (自签 TLS)"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" HY2_PORT
@@ -175,6 +186,7 @@ get_config_all() {
     read -p "$(echo -e "${CYAN}是否开启端口跳跃？(客户端自行配置) [y/N]:${NC} ")" HY2_HOP
     HY2_HOP=${HY2_HOP:-n}
 
+    # ---------- VLESS+Reality （仅一个 SNI） ----------
     echo ""
     info "配置 VLESS+Reality"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" REALITY_PORT
@@ -182,10 +194,8 @@ get_config_all() {
     read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-Reality):${NC} ")" REALITY_NAME
     [[ -z $REALITY_NAME ]] && REALITY_NAME="VLESS-Reality"
     REALITY_UUID=$(cat /proc/sys/kernel/random/uuid)
-    read -p "$(echo -e "${CYAN}目标网站 (dest, 如 www.google.com:443):${NC} ")" REALITY_DEST
-    [[ -z $REALITY_DEST ]] && error "dest 不能为空"
-    read -p "$(echo -e "${CYAN}Server Name (SNI, 默认域名 $DOMAIN):${NC} ")" REALITY_SNI
-    [[ -z $REALITY_SNI ]] && REALITY_SNI="$DOMAIN"
+    read -p "$(echo -e "${CYAN}SNI / 伪装目标 (必填，推荐第三方域名如 www.microsoft.com):${NC} ")" REALITY_SNI
+    [[ -z $REALITY_SNI ]] && error "SNI 不能为空"
     REALITY_SID=$(openssl rand -hex 2)
 
     echo ""
@@ -193,11 +203,11 @@ get_config_all() {
     echo "  域名: $DOMAIN"
     echo "  VLESS-WS: 端口 $WS_PORT, 路径 $WS_PATH, 名称 $WS_NAME"
     echo "  Hysteria2: 端口 $HY2_PORT, 名称 $HY2_NAME, 端口跳跃: ${HY2_HOP^^}"
-    echo "  VLESS-Reality: 端口 $REALITY_PORT, 名称 $REALITY_NAME, dest $REALITY_DEST, SNI $REALITY_SNI"
+    echo "  VLESS-Reality: 端口 $REALITY_PORT, 名称 $REALITY_NAME, SNI=$REALITY_SNI"
 }
 
 write_config() {
-    # Hysteria2 TLS 配置（保持不变）
+    # Hysteria2 TLS 配置（不变）
     local hy2_tls="{
         \"enabled\": true,
         \"certificate_path\": \"$CERT_FILE\",
@@ -205,14 +215,14 @@ write_config() {
         \"server_name\": \"$DOMAIN\"
     }"
 
-    # ✅ 修正 Reality TLS 配置（符合官方文档）
+    # ✅ Reality 配置：server_name 和 handshake.server 都使用同一个 SNI
     local reality_tls="{
         \"enabled\": true,
         \"server_name\": \"$REALITY_SNI\",
         \"reality\": {
             \"enabled\": true,
             \"handshake\": {
-                \"server\": \"$REALITY_DEST\",
+                \"server\": \"$REALITY_SNI\",
                 \"server_port\": 443
             },
             \"private_key\": \"$REALITY_PRIV\",
@@ -345,20 +355,27 @@ urlencode() {
 output_links() {
     echo ""
     echo -e "${GREEN}=========================================${NC}"
-    echo -e "${GREEN}                 节点链接                 ${NC}"
+    echo -e "${GREEN}              VLESS 链接                ${NC}"
     echo -e "${GREEN}=========================================${NC}"
 
     local encoded_path=$(urlencode "$WS_PATH")
-    local ws_link="vless://$WS_UUID@$DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$DOMAIN&path=$encoded_path#$WS_NAME"
-    echo -e "${CYAN}VLESS+WS:${NC}\n$ws_link\n"
+    local ws_link="vless://$WS_UUID@$PUBLIC_IP:$WS_PORT?encryption=none&security=none&type=ws&host=$DOMAIN&path=$encoded_path#$WS_NAME"
+    echo -e "${CYAN}VLESS+WS:${NC}"
+    echo -e "$ws_link"
+    echo ""
 
-    local reality_link="vless://$REALITY_UUID@$DOMAIN:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$REALITY_SNI&fp=chrome&publicKey=$REALITY_PUB&shortId=$REALITY_SID#$REALITY_NAME"
+    # ✅ Reality 链接：使用公网 IP 作为服务器地址
+    local reality_link="vless://$REALITY_UUID@$PUBLIC_IP:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$REALITY_SNI&fp=chrome&publicKey=$REALITY_PUB&shortId=$REALITY_SID#$REALITY_NAME"
     echo -e "${CYAN}VLESS+Reality:${NC}"
     echo -e "$reality_link"
     echo ""
-    
-    local hy2_link="hysteria2://$HY2_UUID@$DOMAIN:$HY2_PORT?insecure=1&sni=$DOMAIN#$HY2_NAME"
-    echo -e "${CYAN}Hysteria2:${NC}\n$hy2_link"
+
+    echo -e "${GREEN}=========================================${NC}"
+    echo -e "${GREEN}            Hysteria2 链接              ${NC}"
+    echo -e "${GREEN}=========================================${NC}"
+    local hy2_link="hysteria2://$HY2_UUID@$PUBLIC_IP:$HY2_PORT?insecure=1&sni=$DOMAIN#$HY2_NAME"
+    echo -e "${CYAN}Hysteria2:${NC}"
+    echo -e "$hy2_link"
     if [[ "${HY2_HOP,,}" == "y" ]]; then
         echo -e "${YELLOW}提示: 已开启端口跳跃，客户端可添加 &ports=10000-50000${NC}"
     fi
@@ -380,6 +397,7 @@ main() {
     detect_pkg_manager
     install_deps
     get_arch
+    get_public_ip
     detect_init
     uninstall_old
     install_singbox
