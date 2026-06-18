@@ -272,6 +272,82 @@ EOF
     ok "配置文件已生成: $CONFIG_JSON"
 }
 
+setup_iptables() {
+    # 仅在用户开启端口跳跃时配置
+    [[ "${HY2_HOP,,}" != "y" || -z "$HY2_PORTS" ]] && return 0
+
+    local start_port=$(echo "$HY2_PORTS" | cut -d'-' -f1)
+    local end_port=$(echo "$HY2_PORTS" | cut -d'-' -f2)
+
+    # 1. 确保 iptables 已安装
+    if ! command -v iptables &>/dev/null; then
+        warn "未安装 iptables，正在尝试安装..."
+        case $PKG_MANAGER in
+            apk)  $INSTALL_CMD iptables ip6tables ;;
+            apt)  $UPDATE_CMD && $INSTALL_CMD iptables ip6tables ;;
+            yum|dnf) $UPDATE_CMD && $INSTALL_CMD iptables iptables-services ;;
+            zypper) $UPDATE_CMD && $INSTALL_CMD iptables ;;
+        esac
+        command -v iptables &>/dev/null || error "iptables 安装失败，请手动安装"
+    fi
+
+    # 2. 删除可能存在的旧规则（避免重复），忽略错误
+    iptables -t nat -D PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT 2>/dev/null || true
+    # 若系统支持 IPv6 且 ip6tables 存在，同样处理
+    if command -v ip6tables &>/dev/null; then
+        ip6tables -t nat -D PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT 2>/dev/null || true
+    fi
+
+    # 3. 添加新规则
+    iptables -t nat -A PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT
+    if command -v ip6tables &>/dev/null; then
+        ip6tables -t nat -A PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT
+        ok "已添加 IPv4 + IPv6 端口跳跃规则 ($start_port-$end_port -> $HY2_PORT)"
+    else
+        ok "已添加 IPv4 端口跳跃规则 ($start_port-$end_port -> $HY2_PORT)"
+    fi
+
+    # 4. 允许 INPUT 链上的 UDP 端口范围（避免被默认规则拦截）
+    iptables -I INPUT -p udp --dport $start_port:$end_port -j ACCEPT
+    if command -v ip6tables &>/dev/null; then
+        ip6tables -I INPUT -p udp --dport $start_port:$end_port -j ACCEPT
+    fi
+
+    # 5. 持久化规则（重启不丢失）
+    info "正在持久化 iptables 规则..."
+    if [[ "$INIT" == "systemd" ]]; then
+        if command -v netfilter-persistent &>/dev/null; then
+            netfilter-persistent save
+            ok "已通过 netfilter-persistent 保存"
+        elif command -v iptables-save &>/dev/null; then
+            mkdir -p /etc/iptables
+            iptables-save > /etc/iptables/rules.v4
+            [ -f /etc/iptables/rules.v6 ] || ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
+            # 尝试启用 iptables-restore 服务（若存在）
+            systemctl enable iptables-restore 2>/dev/null || true
+            systemctl enable ip6tables-restore 2>/dev/null || true
+            ok "已保存规则到 /etc/iptables/rules.v4 和 rules.v6"
+            warn "请确保系统启动时自动加载这些文件（例如通过 iptables-restore 服务或 rc.local）"
+        fi
+    elif [[ "$INIT" == "openrc" ]]; then
+        mkdir -p /etc/iptables
+        iptables-save > /etc/iptables/rules-save
+        if command -v ip6tables &>/dev/null; then
+            ip6tables-save > /etc/iptables/rules-save-ip6
+        fi
+        # 确保 iptables 服务已添加默认运行级
+        if [ -f /etc/init.d/iptables ]; then
+            rc-update add iptables default 2>/dev/null || true
+        fi
+        if [ -f /etc/init.d/ip6tables ]; then
+            rc-update add ip6tables default 2>/dev/null || true
+        fi
+        ok "已保存规则到 /etc/iptables/ 并尝试添加启动服务"
+    else
+        warn "未知 init 系统，请手动持久化 iptables 规则"
+    fi
+}
+
 create_service() {
     if [[ $INIT == "systemd" ]]; then
         cat > /lib/systemd/system/sing-box.service <<EOF
@@ -392,6 +468,7 @@ main() {
     generate_cert
     generate_reality_keys
     write_config
+    setup_iptables
     create_service
     get_public_ip
     output_links
