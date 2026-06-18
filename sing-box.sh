@@ -417,34 +417,68 @@ urlencode() {
 
 get_public_ip() {
     echo ""
+    curl -s ipinfo.io | grep -E '"country"|"city"' | sed -e 's/.*"country": "\(.*\)".*/国家: \1/' -e 's/.*"city": "\(.*\)".*/城市: \1/'
+
+    echo ""
     info "正在获取公网 IP ..."
-    PUBLIC_IP=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 icanhazip.com 2>/dev/null)
-    if [ -z "$PUBLIC_IP" ]; then
-        error "无法获取公网 IP，请检查网络连接或手动设置 PUBLIC_IP 变量"
+    local ip_v4=""
+    local ip_v6=""
+    ip_v4=$(curl -s -4 --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s -4 --connect-timeout 5 icanhazip.com 2>/dev/null)
+    ip_v6=$(curl -s -6 --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s -6 --connect-timeout 5 icanhazip.com 2>/dev/null)
+    
+    if [ -n "$ip_v4" ] && [ -z "$ip_v6" ]; then
+        PUBLIC_IP="$ip_v4"; IP_VERSION=4
+        ok "仅检测到 IPv4: $PUBLIC_IP"
+        return 0
     fi
-    ok "公网 IP: $PUBLIC_IP"
+    if [ -z "$ip_v4" ] && [ -n "$ip_v6" ]; then
+        PUBLIC_IP="$ip_v6"; IP_VERSION=6
+        ok "仅检测到 IPv6: $PUBLIC_IP"
+        return 0
+    fi
+    if [ -z "$ip_v4" ] && [ -z "$ip_v6" ]; then
+        error "无法获取任何公网 IP（IPv4 和 IPv6 均失败）"
+    fi
+    
+    # 双栈 → 让用户选择
+    echo ""
+    echo -e "${CYAN}检测到同时存在 IPv4 和 IPv6 地址${NC}"
+    echo "  IPv4: $ip_v4"
+    echo "  IPv6: $ip_v6"
+    echo "  1) 使用 IPv4"
+    echo "  2) 使用 IPv6"
+    read -p "$(echo -e "${CYAN}请选择 [1-2] (默认 1):${NC} ")" IP_CHOICE
+    case "$IP_CHOICE" in
+        2) PUBLIC_IP="$ip_v6"; IP_VERSION=6; ok "选择 IPv6: $PUBLIC_IP" ;;
+        *) PUBLIC_IP="$ip_v4"; IP_VERSION=4; ok "选择 IPv4: $PUBLIC_IP" ;;
+    esac
 }
 
 output_links() {
     echo ""
     echo -e "${GREEN}节点链接(如果使用vless + ws + cdn 请把端口改成443(security=tls)或80(security=none))：${NC}"
     
+    local ip_for_url="$PUBLIC_IP"
+    if [[ "$PUBLIC_IP" =~ : ]]; then
+        ip_for_url="[$PUBLIC_IP]"
+    fi
+
     local ws_link="vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo -e "$ws_link"
     echo ""
 
-    local reality_link="vless://$UUID@$PUBLIC_IP:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#vless-reality"
+    local reality_link="vless://$UUID@$ip_for_url:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#vless-reality"
     echo -e "$reality_link"
     echo ""
 
-    local hy2_link="hysteria2://$UUID@$PUBLIC_IP:$HY2_PORT?security=tls&sni=$COMMON_SNI"
+    local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI"
     if [[ "${HY2_HOP,,}" == "y" && -n "$HY2_PORTS" ]]; then
         hy2_link="${hy2_link}&mport=$HY2_PORTS&ports=$HY2_PORTS"
     fi
     hy2_link="${hy2_link}#hy2"
     echo -e "$hy2_link"
     echo ""
-    echo -e "${YELLOW}复制链接到客户端即可使用（自签证书需开启跳过验证）${NC}"
+    echo -e "${YELLOW}复制链接到客户端即可使用${NC}"
 }
 
 main() {
