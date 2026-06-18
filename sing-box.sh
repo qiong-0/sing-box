@@ -345,19 +345,18 @@ urlencode() {
 output_links() {
     echo ""
     echo -e "${GREEN}=========================================${NC}"
-    echo -e "${GREEN}              VLESS 链接                ${NC}"
+    echo -e "${GREEN}                 节点链接                 ${NC}"
     echo -e "${GREEN}=========================================${NC}"
 
     local encoded_path=$(urlencode "$WS_PATH")
     local ws_link="vless://$WS_UUID@$DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$DOMAIN&path=$encoded_path#$WS_NAME"
     echo -e "${CYAN}VLESS+WS:${NC}\n$ws_link\n"
 
-    local reality_link="vless://$REALITY_UUID@$DOMAIN:$REALITY_PORT?encryption=none&security=reality&sni=$REALITY_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID#$REALITY_NAME"
-    echo -e "${CYAN}VLESS+Reality:${NC}\n$reality_link\n"
-
-    echo -e "${GREEN}=========================================${NC}"
-    echo -e "${GREEN}            Hysteria2 链接              ${NC}"
-    echo -e "${GREEN}=========================================${NC}"
+    local reality_link="vless://$REALITY_UUID@$DOMAIN:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$REALITY_SNI&fp=chrome&publicKey=$REALITY_PUB&shortId=$REALITY_SID#$REALITY_NAME"
+    echo -e "${CYAN}VLESS+Reality:${NC}"
+    echo -e "$reality_link"
+    echo ""
+    
     local hy2_link="hysteria2://$HY2_UUID@$DOMAIN:$HY2_PORT?insecure=1&sni=$DOMAIN#$HY2_NAME"
     echo -e "${CYAN}Hysteria2:${NC}\n$hy2_link"
     if [[ "${HY2_HOP,,}" == "y" ]]; then
