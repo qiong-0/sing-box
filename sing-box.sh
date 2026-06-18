@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-#===============================================================================
-# 名称: sing-box_multi_protocol_install.sh
-# 功能: 一键安装 sing-box，配置 VLESS+WS、Hysteria2 (自签TLS)、VLESS+Reality
-# 环境: 兼容 systemd / OpenRC，自动适配包管理器，支持轻量容器
-# 用法: bash sing-box_multi_protocol_install.sh
-#===============================================================================
 
 set -e
 
