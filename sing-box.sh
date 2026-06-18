@@ -145,7 +145,8 @@ generate_reality_keys() {
 
 get_config_all() {
     UUID=$(cat /proc/sys/kernel/random/uuid)
-
+    echo ""
+    echo "UUID: $UUID"
     echo ""
     info "配置 VLESS + WebSocket (无 TLS)"
     read -p "$(echo -e "${CYAN}域名:${NC} ")" WS_DOMAIN
@@ -267,13 +268,11 @@ EOF
 }
 
 setup_iptables() {
-    # 仅在用户开启端口跳跃时配置
     [[ "${HY2_HOP,,}" != "y" || -z "$HY2_PORTS" ]] && return 0
 
     local start_port=$(echo "$HY2_PORTS" | cut -d'-' -f1)
     local end_port=$(echo "$HY2_PORTS" | cut -d'-' -f2)
 
-    # 1. 确保 iptables 已安装
     if ! command -v iptables &>/dev/null; then
         warn "未安装 iptables，正在尝试安装..."
         case $PKG_MANAGER in
@@ -285,14 +284,11 @@ setup_iptables() {
         command -v iptables &>/dev/null || error "iptables 安装失败，请手动安装"
     fi
 
-    # 2. 删除可能存在的旧规则（避免重复），忽略错误
     iptables -t nat -D PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT 2>/dev/null || true
-    # 若系统支持 IPv6 且 ip6tables 存在，同样处理
     if command -v ip6tables &>/dev/null; then
         ip6tables -t nat -D PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT 2>/dev/null || true
     fi
 
-    # 3. 添加新规则
     iptables -t nat -A PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT
     if command -v ip6tables &>/dev/null; then
         ip6tables -t nat -A PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT
@@ -301,13 +297,11 @@ setup_iptables() {
         ok "已添加 IPv4 端口跳跃规则 ($start_port-$end_port -> $HY2_PORT)"
     fi
 
-    # 4. 允许 INPUT 链上的 UDP 端口范围（避免被默认规则拦截）
     iptables -I INPUT -p udp --dport $start_port:$end_port -j ACCEPT
     if command -v ip6tables &>/dev/null; then
         ip6tables -I INPUT -p udp --dport $start_port:$end_port -j ACCEPT
     fi
 
-    # 5. 持久化规则（重启不丢失）
     info "正在持久化 iptables 规则..."
     if [[ "$INIT" == "systemd" ]]; then
         if command -v netfilter-persistent &>/dev/null; then
@@ -317,7 +311,6 @@ setup_iptables() {
             mkdir -p /etc/iptables
             iptables-save > /etc/iptables/rules.v4
             [ -f /etc/iptables/rules.v6 ] || ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
-            # 尝试启用 iptables-restore 服务（若存在）
             systemctl enable iptables-restore 2>/dev/null || true
             systemctl enable ip6tables-restore 2>/dev/null || true
             ok "已保存规则到 /etc/iptables/rules.v4 和 rules.v6"
@@ -329,7 +322,6 @@ setup_iptables() {
         if command -v ip6tables &>/dev/null; then
             ip6tables-save > /etc/iptables/rules-save-ip6
         fi
-        # 确保 iptables 服务已添加默认运行级
         if [ -f /etc/init.d/iptables ]; then
             rc-update add iptables default 2>/dev/null || true
         fi
@@ -426,22 +418,21 @@ get_public_ip() {
 
     if [ -n "$ip_v4" ] && [ -z "$ip_v6" ]; then
         PUBLIC_IP="$ip_v4"; IP_VERSION=4
-        ok "仅检测到 IPv4: $PUBLIC_IP"
+        ok "IPv4: $PUBLIC_IP"
         return 0
     fi
     if [ -z "$ip_v4" ] && [ -n "$ip_v6" ]; then
         PUBLIC_IP="$ip_v6"; IP_VERSION=6
-        ok "仅检测到 IPv6: $PUBLIC_IP"
+        ok "IPv6: $PUBLIC_IP"
         return 0
     fi
     if [ -n "$ip_v4" ] && [ -n "$ip_v6" ]; then
         echo ""
-        echo -e "${CYAN}检测到同时存在 IPv4 和 IPv6 地址${NC}"
-        echo "  IPv4: $ip_v4"
-        echo "  IPv6: $ip_v6"
-        echo "  1) 使用 IPv4"
-        echo "  2) 使用 IPv6"
-        read -p "$(echo -e "${CYAN}请选择 [1-2] (默认 1):${NC} ")" IP_CHOICE
+        echo "IPv4: $ip_v4"
+        echo "IPv6: $ip_v6"
+        echo "1) 使用 IPv4"
+        echo "2) 使用 IPv6"
+        read -p "$(echo -e "${CYAN}请选择节点使用的IP [1-2] (默认 1):${NC} ")" IP_CHOICE
         case "$IP_CHOICE" in
             2) PUBLIC_IP="$ip_v6"; IP_VERSION=6; ok "选择 IPv6: $PUBLIC_IP" ;;
             *) PUBLIC_IP="$ip_v4"; IP_VERSION=4; ok "选择 IPv4: $PUBLIC_IP" ;;
@@ -467,12 +458,10 @@ output_links() {
         ip_for_url="[$PUBLIC_IP]"
     fi
 
-    local ws_link="vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=#vless-ws"
-    echo -e "$ws_link"
+    echo -e "vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo ""
 
-    local reality_link="vless://$UUID@$ip_for_url:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#vless-reality"
-    echo -e "$reality_link"
+    echo -e "vless://$UUID@$ip_for_url:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#vless-reality"
     echo ""
 
     local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI"
