@@ -160,12 +160,9 @@ generate_reality_keys() {
 
 get_config_all() {
     echo ""
-    read -p "$(echo -e "${CYAN}请输入 VLESS + WebSocket 使用的域名:${NC} ")" WS_DOMAIN
-    [[ -z $WS_DOMAIN ]] && error "WS 域名不能为空"
-
-    # ---------- VLESS+WS ----------
-    echo ""
     info "配置 VLESS + WebSocket (无 TLS)"
+    read -p "$(echo -e "${CYAN}域名:${NC} ")" WS_DOMAIN
+    [[ -z $WS_DOMAIN ]] && error "域名不能为空"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" WS_PORT
     [[ -z $WS_PORT ]] && WS_PORT=$((RANDOM % 40001 + 10000))
     read -p "$(echo -e "${CYAN}路径 (默认 /):${NC} ")" WS_PATH
@@ -174,7 +171,11 @@ get_config_all() {
     [[ -z $WS_NAME ]] && WS_NAME="VLESS-WS"
     WS_UUID=$(cat /proc/sys/kernel/random/uuid)
 
-    # ---------- Hysteria2 ----------
+    echo ""
+    info "配置 SNI（用于 TLS 伪装）"
+    read -p "$(echo -e "${CYAN}SNI (默认 apple.com):${NC} ")" COMMON_SNI
+    [[ -z $COMMON_SNI ]] && COMMON_SNI="apple.com"
+
     echo ""
     info "配置 Hysteria2"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" HY2_PORT
@@ -195,12 +196,6 @@ get_config_all() {
         HY2_PORTS=""
     fi
 
-    # ---------- VLESS+Reality （与 Hysteria2 共用 SNI） ----------
-    echo ""
-    info "配置 SNI（用于 TLS 伪装）"
-    read -p "$(echo -e "${CYAN}SNI (默认 apple.com):${NC} ")" COMMON_SNI
-    [[ -z $COMMON_SNI ]] && COMMON_SNI="apple.com"
-    
     echo ""
     info "配置 VLESS + Reality"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" REALITY_PORT
