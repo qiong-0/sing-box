@@ -106,7 +106,6 @@ install_singbox() {
 
 get_config() {
     echo ""
-    info "请输入配置信息"
     read -p "$(echo -e "${CYAN}域名:${NC} ")" DOMAIN
     [[ -z $DOMAIN ]] && error "域名不能为空"
     echo "域名: $DOMAIN"
