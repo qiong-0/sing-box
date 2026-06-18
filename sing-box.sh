@@ -181,7 +181,7 @@ get_config_all() {
             warn "端口范围格式错误，使用默认 10000-50000"
             HY2_PORTS="10000-50000"
         fi
-        echo "端口跳跃: ${HY2_HOP^^}"
+        echo "端口跳跃: $HY2_PORTS"
     else
         HY2_PORTS=""
     fi
@@ -192,6 +192,7 @@ get_config_all() {
     [[ -z $REALITY_PORT ]] && REALITY_PORT=$((RANDOM % 40001 + 10000))
     echo "端口: $REALITY_PORT"
     REALITY_SID=$(openssl rand -hex 2)
+    echo ""
 }
 
 write_config() {
