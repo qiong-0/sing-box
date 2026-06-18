@@ -197,7 +197,7 @@ get_config_all() {
 }
 
 write_config() {
-    # Hysteria2 TLS
+    # Hysteria2 TLS 配置（保持不变）
     local hy2_tls="{
         \"enabled\": true,
         \"certificate_path\": \"$CERT_FILE\",
@@ -205,14 +205,21 @@ write_config() {
         \"server_name\": \"$DOMAIN\"
     }"
 
-    # ✅ 修正 Reality TLS（不使用子对象，直接放在 tls 下）
+    # ✅ 修正 Reality TLS 配置（符合官方文档）
     local reality_tls="{
         \"enabled\": true,
-        \"type\": \"reality\",
         \"server_name\": \"$REALITY_SNI\",
-        \"public_key\": \"$REALITY_PUB\",
-        \"private_key\": \"$REALITY_PRIV\",
-        \"short_id\": \"$REALITY_SID\"
+        \"reality\": {
+            \"enabled\": true,
+            \"handshake\": {
+                \"server\": \"$REALITY_DEST\",
+                \"server_port\": 443
+            },
+            \"private_key\": \"$REALITY_PRIV\",
+            \"short_id\": [
+                \"$REALITY_SID\"
+            ]
+        }
     }"
 
     cat > "$CONFIG_JSON" <<EOF
