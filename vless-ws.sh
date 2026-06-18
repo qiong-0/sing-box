@@ -13,7 +13,6 @@ warn()  { echo -e "${YELLOW}警告:${NC} $*"; }
 info()  { echo -e "${CYAN}>>>${NC} $*"; }
 ok()    { echo -e "${GREEN}✓${NC} $*"; }
 
-# 检测包管理器
 detect_pkg_manager() {
     if command -v apk &>/dev/null; then
         PKG_MANAGER="apk"
@@ -43,20 +42,13 @@ detect_pkg_manager() {
 install_deps() {
     local deps="wget tar curl"
     case $PKG_MANAGER in
-        apk) 
-            $INSTALL_CMD $deps bash
-            $INSTALL_CMD gcompat
-            ;;
-        apt) 
-            $UPDATE_CMD && $INSTALL_CMD $deps 
-            ;;
-        yum|dnf|zypper) 
-            $UPDATE_CMD && $INSTALL_CMD $deps 
-            ;;
+        apk) $INSTALL_CMD $deps bash gcompat ;;
+        apt) $UPDATE_CMD && $INSTALL_CMD $deps ;;
+        yum|dnf|zypper) $UPDATE_CMD && $INSTALL_CMD $deps ;;
     esac
-    command -v wget &>/dev/null || error "wget 安装失败"
-    command -v tar  &>/dev/null || error "tar 安装失败"
-    command -v curl &>/dev/null || error "curl 安装失败"
+    for cmd in wget tar curl openssl; do
+        command -v $cmd &>/dev/null || error "$cmd 安装失败"
+    done
 }
 
 detect_init() {
