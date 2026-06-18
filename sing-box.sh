@@ -160,9 +160,9 @@ generate_reality_keys() {
 
 get_config_all() {
     echo ""
-    info "请输入公共域名（用于 VLESS+WS 和 Hysteria2 的 host/SNI）"
-    read -p "$(echo -e "${CYAN}域名 (必填):${NC} ")" DOMAIN
-    [[ -z $DOMAIN ]] && error "域名不能为空"
+    info "请输入 VLESS+WebSocket 使用的域名（用于 Host 和路径伪装）"
+    read -p "$(echo -e "${CYAN}WS 域名 (必填):${NC} ")" WS_DOMAIN
+    [[ -z $WS_DOMAIN ]] && error "WS 域名不能为空"
 
     # ---------- VLESS+WS ----------
     echo ""
@@ -184,45 +184,49 @@ get_config_all() {
     [[ -z $HY2_NAME ]] && HY2_NAME="HY2"
     HY2_UUID=$(cat /proc/sys/kernel/random/uuid)
     read -p "$(echo -e "${CYAN}是否开启端口跳跃？(客户端自行配置) [y/N]:${NC} ")" HY2_HOP
-    HY2_HOP=${HY2_HOP:-n}
+    HY2_HOP=${HY2_HOP:-n}   # 默认 n
 
-    # ---------- VLESS+Reality （仅一个 SNI） ----------
+    # ---------- VLESS+Reality （与 Hysteria2 共用 SNI） ----------
     echo ""
-    info "配置 VLESS+Reality"
+    info "配置 VLESS+Reality 和 Hysteria2 共用的 SNI（用于 TLS 伪装）"
+    read -p "$(echo -e "${CYAN}SNI / 伪装目标 (默认 apple.com):${NC} ")" COMMON_SNI
+    [[ -z $COMMON_SNI ]] && COMMON_SNI="apple.com"
+    
+    echo ""
+    info "配置 VLESS+Reality 专用参数"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" REALITY_PORT
     [[ -z $REALITY_PORT ]] && REALITY_PORT=$((RANDOM % 40001 + 10000))
     read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-Reality):${NC} ")" REALITY_NAME
     [[ -z $REALITY_NAME ]] && REALITY_NAME="VLESS-Reality"
     REALITY_UUID=$(cat /proc/sys/kernel/random/uuid)
-    read -p "$(echo -e "${CYAN}SNI / 伪装目标 (必填，推荐第三方域名如 www.microsoft.com):${NC} ")" REALITY_SNI
-    [[ -z $REALITY_SNI ]] && error "SNI 不能为空"
     REALITY_SID=$(openssl rand -hex 2)
 
     echo ""
     ok "配置信息汇总"
-    echo "  域名: $DOMAIN"
+    echo "  WS 域名: $WS_DOMAIN"
     echo "  VLESS-WS: 端口 $WS_PORT, 路径 $WS_PATH, 名称 $WS_NAME"
     echo "  Hysteria2: 端口 $HY2_PORT, 名称 $HY2_NAME, 端口跳跃: ${HY2_HOP^^}"
-    echo "  VLESS-Reality: 端口 $REALITY_PORT, 名称 $REALITY_NAME, SNI=$REALITY_SNI"
+    echo "  VLESS-Reality: 端口 $REALITY_PORT, 名称 $REALITY_NAME"
+    echo "  共用 SNI: $COMMON_SNI"
 }
 
 write_config() {
-    # Hysteria2 TLS 配置（不变）
+    # Hysteria2 TLS（server_name 使用共用 SNI）
     local hy2_tls="{
         \"enabled\": true,
         \"certificate_path\": \"$CERT_FILE\",
         \"key_path\": \"$KEY_FILE\",
-        \"server_name\": \"$DOMAIN\"
+        \"server_name\": \"$COMMON_SNI\"
     }"
 
-    # ✅ Reality 配置：server_name 和 handshake.server 都使用同一个 SNI
+    # Reality TLS（server_name 和 handshake 都使用共用 SNI）
     local reality_tls="{
         \"enabled\": true,
-        \"server_name\": \"$REALITY_SNI\",
+        \"server_name\": \"$COMMON_SNI\",
         \"reality\": {
             \"enabled\": true,
             \"handshake\": {
-                \"server\": \"$REALITY_SNI\",
+                \"server\": \"$COMMON_SNI\",
                 \"server_port\": 443
             },
             \"private_key\": \"$REALITY_PRIV\",
@@ -252,7 +256,7 @@ write_config() {
         "type": "ws",
         "path": "$WS_PATH",
         "headers": {
-          "Host": "$DOMAIN"
+          "Host": "$WS_DOMAIN"
         }
       }
     },
@@ -359,13 +363,12 @@ output_links() {
     echo -e "${GREEN}=========================================${NC}"
 
     local encoded_path=$(urlencode "$WS_PATH")
-    local ws_link="vless://$WS_UUID@$PUBLIC_IP:$WS_PORT?encryption=none&security=none&type=ws&host=$DOMAIN&path=$encoded_path#$WS_NAME"
+    local ws_link="vless://$WS_UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=$encoded_path#$WS_NAME"
     echo -e "${CYAN}VLESS+WS:${NC}"
     echo -e "$ws_link"
     echo ""
 
-    # ✅ Reality 链接：使用公网 IP 作为服务器地址
-    local reality_link="vless://$REALITY_UUID@$PUBLIC_IP:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$REALITY_SNI&fp=chrome&publicKey=$REALITY_PUB&shortId=$REALITY_SID#$REALITY_NAME"
+    local reality_link="vless://$REALITY_UUID@$PUBLIC_IP:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&publicKey=$REALITY_PUB&shortId=$REALITY_SID#$REALITY_NAME"
     echo -e "${CYAN}VLESS+Reality:${NC}"
     echo -e "$reality_link"
     echo ""
@@ -373,7 +376,8 @@ output_links() {
     echo -e "${GREEN}=========================================${NC}"
     echo -e "${GREEN}            Hysteria2 链接              ${NC}"
     echo -e "${GREEN}=========================================${NC}"
-    local hy2_link="hysteria2://$HY2_UUID@$PUBLIC_IP:$HY2_PORT?insecure=1&sni=$DOMAIN#$HY2_NAME"
+    local hy2_link="hysteria2://$HY2_UUID@$PUBLIC_IP:$HY2_PORT?insecure=1&sni=$COMMON_SNI#$HY2_NAME"
+    # 注意：Hy2 的服务器地址也可以使用域名，但您要求用IP，这里也改为IP
     echo -e "${CYAN}Hysteria2:${NC}"
     echo -e "$hy2_link"
     if [[ "${HY2_HOP,,}" == "y" ]]; then
