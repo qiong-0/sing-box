@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
-#===============================================================================
-# 名称: sing-box_vless_ws_install.sh
-# 功能: 一键安装 sing-box，配置 VLESS + WebSocket (无 TLS)
-# 环境: 兼容 systemd / OpenRC，自动适配包管理器
-# 用法: bash sing-box_vless_ws_install.sh
-#===============================================================================
 
 set -e
 
-# 颜色
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -47,13 +40,12 @@ detect_pkg_manager() {
     fi
 }
 
-# 安装必要工具
 install_deps() {
     local deps="wget tar curl"
     case $PKG_MANAGER in
         apk) 
-            $INSTALL_CMD $deps bash        # 安装原有依赖
-            $INSTALL_CMD gcompat           # 添加 gcompat 解决 glibc 兼容性问题
+            $INSTALL_CMD $deps bash
+            $INSTALL_CMD gcompat
             ;;
         apt) 
             $UPDATE_CMD && $INSTALL_CMD $deps 
@@ -67,7 +59,6 @@ install_deps() {
     command -v curl &>/dev/null || error "curl 安装失败"
 }
 
-# 检测 init 系统
 detect_init() {
     if command -v systemctl &>/dev/null; then
         INIT="systemd"
@@ -79,7 +70,6 @@ detect_init() {
     ok "init 系统: $INIT"
 }
 
-# 获取系统架构
 get_arch() {
     case $(uname -m) in
         x86_64|amd64) ARCH="amd64" ;;
@@ -89,7 +79,6 @@ get_arch() {
     ok "系统架构: $ARCH"
 }
 
-# 下载并安装 sing-box 二进制
 install_singbox() {
     local latest_url
     latest_url=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
@@ -106,32 +95,19 @@ install_singbox() {
     ok "sing-box 安装完成: $($CORE_BIN version | head -n1)"
 }
 
-# 交互式获取配置
 get_config() {
     echo ""
     info "请输入配置信息"
-    read -p "$(echo -e "${CYAN}域名 (必填):${NC} ")" DOMAIN
+    read -p "$(echo -e "${CYAN}域名:${NC} ")" DOMAIN
     [[ -z $DOMAIN ]] && error "域名不能为空"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" PORT
     if [[ -z $PORT ]]; then
         PORT=$((RANDOM % 40001 + 10000))
-        ok "随机端口: $PORT"
+        ok "端口: $PORT"
     fi
-    read -p "$(echo -e "${CYAN}WebSocket 路径 (默认 /):${NC} ")" WSPATH
-    [[ -z $WSPATH ]] && WSPATH="/"
-    read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-WS):${NC} ")" REMARK
-    [[ -z $REMARK ]] && REMARK="VLESS-WS"
     UUID=$(cat /proc/sys/kernel/random/uuid)
-    echo ""
-    ok "配置信息"
-    echo "  域名: $DOMAIN"
-    echo "  端口: $PORT"
-    echo "  路径: $WSPATH"
-    echo "  UUID: $UUID"
-    echo "  节点名: $REMARK"
 }
 
-# 生成 config.json
 write_config() {
     cat > "$CONFIG_JSON" <<EOF
 {
@@ -154,7 +130,7 @@ write_config() {
       ],
       "transport": {
         "type": "ws",
-        "path": "$WSPATH",
+        "path": "/",
         "headers": {
           "Host": "$DOMAIN"
         }
@@ -172,7 +148,6 @@ EOF
     ok "配置文件已生成: $CONFIG_JSON"
 }
 
-# 创建服务 (systemd 或 openrc)
 create_service() {
     if [[ $INIT == "systemd" ]]; then
         cat > /lib/systemd/system/sing-box.service <<EOF
@@ -217,7 +192,6 @@ EOF
     fi
 
     sleep 2
-    # 检查服务状态
     if [[ $INIT == "systemd" ]] && systemctl is-active --quiet sing-box; then
         ok "服务运行正常"
     elif [[ $INIT == "openrc" ]] && rc-service sing-box status | grep -q "started"; then
@@ -227,26 +201,50 @@ EOF
     fi
 }
 
-# 生成 vless 链接
-output_link() {
-    # URL 编码路径
-    encoded_path=$(echo -n "$WSPATH" | sed 's/ /%20/g; s/!/%21/g; s/#/%23/g; s/\$/%24/g; s/&/%26/g; s/'\''/%27/g; s/(/%28/g; s/)/%29/g; s/*/%2A/g; s/+/%2B/g; s/,/%2C/g; s/\//%2F/g; s/:/%3A/g; s/;/%3B/g; s/=/%3D/g; s/?/%3F/g; s/@/%40/g; s/\[/%5B/g; s/\]/%5D/g')
-    local vless_link="vless://$UUID@$DOMAIN:$PORT?encryption=none&security=none&type=ws&host=$DOMAIN&path=$encoded_path#$REMARK"
+get_public_ip() {
     echo ""
-    echo -e "${GREEN}=========================================${NC}"
-    echo -e "${GREEN}              VLESS 链接                ${NC}"
-    echo -e "${GREEN}=========================================${NC}"
-    echo -e "${CYAN}$vless_link${NC}"
+    echo "$(timeout 5 curl -s4 --connect-timeout 2 --max-time 4 -k https://ipinfo.io 2>/dev/null | grep -E '"country"|"city"' | sed -e 's/.*"country": "\(.*\)".*/国家: \1/' -e 's/.*"city": "\(.*\)".*/城市: \1/')"
+    
+    echo ""
+    info "正在获取公网 IP ..."
+
+    local ip_v4=""
+    local ip_v6=""
+    ip_v4=$(timeout 5 curl -s4 --connect-timeout 2 --max-time 4 -k https://icanhazip.com 2>/dev/null | head -n1)
+    ip_v6=$(timeout 5 curl -s6 --connect-timeout 2 --max-time 4 -k https://icanhazip.com 2>/dev/null | head -n1)
+
+    ip_v4=$(echo "$ip_v4" | tr -d '\r\n')
+    ip_v6=$(echo "$ip_v6" | tr -d '\r\n')
+
+    if [ -n "$ip_v4" ] && [ -z "$ip_v6" ]; then
+        PUBLIC_IP="$ip_v4"; IP_VERSION=4
+        ok "仅检测到 IPv4: $PUBLIC_IP"
+        return 0
+    fi
+    if [ -z "$ip_v4" ] && [ -n "$ip_v6" ]; then
+        PUBLIC_IP="$ip_v6"; IP_VERSION=6
+        ok "仅检测到 IPv6: $PUBLIC_IP"
+        return 0
+    fi
+    if [ -n "$ip_v4" ] && [ -n "$ip_v6" ]; then
+        echo ""
+        echo -e "${CYAN}检测到同时存在 IPv4 和 IPv6 地址${NC}"
+        echo "  IPv4: $ip_v4"
+        echo "  IPv6: $ip_v6"
+        return 0
+    fi
+}
+
+output_link() {
+    echo ""
+    echo -e "vless://$UUID@$DOMAIN:$PORT?encryption=none&security=none&type=ws&host=$DOMAIN&path=#vless-ws"
     echo ""
     echo -e "${YELLOW}提示: 复制上述链接到客户端即可使用${NC}"
 }
 
-# 主流程
 main() {
-    # 检查 root
     [[ $EUID -ne 0 ]] && error "请以 root 用户执行（使用 sudo -i）"
 
-    # 全局变量
     CORE_DIR="/etc/sing-box"
     CONF_DIR="$CORE_DIR/conf"
     LOG_DIR="/var/log/sing-box"
