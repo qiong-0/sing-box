@@ -363,22 +363,15 @@ output_links() {
     echo -e "${GREEN}=========================================${NC}"
 
     local encoded_path=$(urlencode "$WS_PATH")
-    local ws_link="vless://$WS_UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=$encoded_path#$WS_NAME"
-    echo -e "${CYAN}VLESS+WS:${NC}"
+    local ws_link="vless://$WS_UUID@$WS_DOMAIN:443?encryption=none&security=tls&type=ws&host=$WS_DOMAIN&path=$encoded_path#$WS_NAME"
     echo -e "$ws_link"
     echo ""
 
     local reality_link="vless://$REALITY_UUID@$PUBLIC_IP:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&publicKey=$REALITY_PUB&shortId=$REALITY_SID#$REALITY_NAME"
-    echo -e "${CYAN}VLESS+Reality:${NC}"
     echo -e "$reality_link"
     echo ""
 
-    echo -e "${GREEN}=========================================${NC}"
-    echo -e "${GREEN}            Hysteria2 链接              ${NC}"
-    echo -e "${GREEN}=========================================${NC}"
     local hy2_link="hysteria2://$HY2_UUID@$PUBLIC_IP:$HY2_PORT?insecure=1&sni=$COMMON_SNI#$HY2_NAME"
-    # 注意：Hy2 的服务器地址也可以使用域名，但您要求用IP，这里也改为IP
-    echo -e "${CYAN}Hysteria2:${NC}"
     echo -e "$hy2_link"
     if [[ "${HY2_HOP,,}" == "y" ]]; then
         echo -e "${YELLOW}提示: 已开启端口跳跃，客户端可添加 &ports=10000-50000${NC}"
