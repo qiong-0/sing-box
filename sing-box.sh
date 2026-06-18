@@ -417,32 +417,19 @@ urlencode() {
 
 get_public_ip() {
     echo ""
-    # 获取地理位置（非必须，失败忽略）
-    geo_info=$(curl -s --connect-timeout 2 --max-time 3 -k https://ipinfo.io 2>/dev/null | grep -E '"country"|"city"' | sed -e 's/.*"country": "\(.*\)".*/国家: \1/' -e 's/.*"city": "\(.*\)".*/城市: \1/')
-    [ -n "$geo_info" ] && echo -e "$geo_info" || echo "（无法获取地理位置）"
+    echo "$(timeout 5 curl -s4 --connect-timeout 2 --max-time 4 -k https://ipinfo.io 2>/dev/null | grep -E '"country"|"city"' | sed -e 's/.*"country": "\(.*\)".*/国家: \1/' -e 's/.*"city": "\(.*\)".*/城市: \1/')"
+    
     echo ""
     info "正在获取公网 IP ..."
 
     local ip_v4=""
     local ip_v6=""
-    local ip_services=("https://ip.sb" "https://icanhazip.com" "https://ifconfig.me")
+    ip_v4=$(timeout 5 curl -s4 --connect-timeout 2 --max-time 4 -k https://icanhazip.com 2>/dev/null | head -n1)
+    ip_v6=$(timeout 5 curl -s6 --connect-timeout 2 --max-time 4 -k https://icanhazip.com 2>/dev/null | head -n1)
 
-    # 尝试获取 IPv4（强制4）
-    for url in "${ip_services[@]}"; do
-        ip_v4=$(timeout 5 curl -s4 --connect-timeout 2 --max-time 4 -k "$url" 2>/dev/null | head -n1)
-        [ -n "$ip_v4" ] && break
-    done
-    # 尝试获取 IPv6（强制6）
-    for url in "${ip_services[@]}"; do
-        ip_v6=$(timeout 5 curl -s6 --connect-timeout 2 --max-time 4 -k "$url" 2>/dev/null | head -n1)
-        [ -n "$ip_v6" ] && break
-    done
-
-    # 清理换行符
     ip_v4=$(echo "$ip_v4" | tr -d '\r\n')
     ip_v6=$(echo "$ip_v6" | tr -d '\r\n')
 
-    # 判断结果
     if [ -n "$ip_v4" ] && [ -z "$ip_v6" ]; then
         PUBLIC_IP="$ip_v4"; IP_VERSION=4
         ok "仅检测到 IPv4: $PUBLIC_IP"
@@ -468,7 +455,6 @@ get_public_ip() {
         return 0
     fi
 
-    # 全部失败 → 手动输入
     warn "所有自动获取方式均失败（超时或不可达），请手动输入公网 IP"
     read -p "$(echo -e "${CYAN}请输入公网 IP:${NC} ")" PUBLIC_IP
     if [ -z "$PUBLIC_IP" ]; then
