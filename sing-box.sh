@@ -367,7 +367,7 @@ output_links() {
     echo -e "$ws_link"
     echo ""
 
-    local reality_link="vless://$REALITY_UUID@$PUBLIC_IP:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&publicKey=$REALITY_PUB&shortId=$REALITY_SID#$REALITY_NAME"
+    local reality_link="vless://$REALITY_UUID@$PUBLIC_IP:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#$REALITY_NAME"
     echo -e "$reality_link"
     echo ""
 
