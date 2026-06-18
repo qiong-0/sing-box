@@ -159,17 +159,14 @@ generate_reality_keys() {
 }
 
 get_config_all() {
+    UUID=$(cat /proc/sys/kernel/random/uuid)
+
     echo ""
     info "配置 VLESS + WebSocket (无 TLS)"
     read -p "$(echo -e "${CYAN}域名:${NC} ")" WS_DOMAIN
     [[ -z $WS_DOMAIN ]] && error "域名不能为空"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" WS_PORT
     [[ -z $WS_PORT ]] && WS_PORT=$((RANDOM % 40001 + 10000))
-    read -p "$(echo -e "${CYAN}路径 (默认 /):${NC} ")" WS_PATH
-    [[ -z $WS_PATH ]] && WS_PATH="/"
-    read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-WS):${NC} ")" WS_NAME
-    [[ -z $WS_NAME ]] && WS_NAME="VLESS-WS"
-    WS_UUID=$(cat /proc/sys/kernel/random/uuid)
 
     echo ""
     info "配置 SNI（用于 TLS 伪装）"
@@ -180,9 +177,6 @@ get_config_all() {
     info "配置 Hysteria2"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" HY2_PORT
     [[ -z $HY2_PORT ]] && HY2_PORT=$((RANDOM % 40001 + 10000))
-    read -p "$(echo -e "${CYAN}节点名称 (默认 HY2):${NC} ")" HY2_NAME
-    [[ -z $HY2_NAME ]] && HY2_NAME="HY2"
-    HY2_UUID=$(cat /proc/sys/kernel/random/uuid)
     read -p "$(echo -e "${CYAN}是否开启端口跳跃？(默认n) [y/n]:${NC} ")" HY2_HOP
     HY2_HOP=${HY2_HOP:-n}
     if [[ "${HY2_HOP,,}" == "y" ]]; then
@@ -200,17 +194,14 @@ get_config_all() {
     info "配置 VLESS + Reality"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" REALITY_PORT
     [[ -z $REALITY_PORT ]] && REALITY_PORT=$((RANDOM % 40001 + 10000))
-    read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-Reality):${NC} ")" REALITY_NAME
-    [[ -z $REALITY_NAME ]] && REALITY_NAME="VLESS-Reality"
-    REALITY_UUID=$(cat /proc/sys/kernel/random/uuid)
     REALITY_SID=$(openssl rand -hex 2)
 
     echo ""
     ok "配置信息汇总"
     echo "  WS 域名: $WS_DOMAIN"
-    echo "  VLESS-WS: 端口 $WS_PORT, 路径 $WS_PATH, 名称 $WS_NAME"
-    echo "  Hysteria2: 端口 $HY2_PORT, 名称 $HY2_NAME, 端口跳跃: ${HY2_HOP^^}"
-    echo "  VLESS-Reality: 端口 $REALITY_PORT, 名称 $REALITY_NAME"
+    echo "  VLESS-WS: 端口 $WS_PORT"
+    echo "  Hysteria2: 端口 $HY2_PORT, 端口跳跃: ${HY2_HOP^^}"
+    echo "  VLESS-Reality: 端口 $REALITY_PORT"
     echo "  SNI: $COMMON_SNI"
 }
 
@@ -252,11 +243,11 @@ write_config() {
       "listen": "::",
       "listen_port": $WS_PORT,
       "users": [
-        { "uuid": "$WS_UUID", "flow": "" }
+        { "uuid": "$UUID", "flow": "" }
       ],
       "transport": {
         "type": "ws",
-        "path": "$WS_PATH",
+        "path": "/",
         "headers": {
           "Host": "$WS_DOMAIN"
         }
@@ -268,7 +259,7 @@ write_config() {
       "listen": "::",
       "listen_port": $HY2_PORT,
       "users": [
-        { "password": "$HY2_UUID" }
+        { "password": "$UUID" }
       ],
       "tls": $hy2_tls
     },
@@ -278,7 +269,7 @@ write_config() {
       "listen": "::",
       "listen_port": $REALITY_PORT,
       "users": [
-        { "uuid": "$REALITY_UUID", "flow": "xtls-rprx-vision" }
+        { "uuid": "$UUID", "flow": "xtls-rprx-vision" }
       ],
       "tls": $reality_tls
     }
@@ -362,20 +353,19 @@ output_links() {
     echo ""
     echo -e "${GREEN}节点链接：${NC}"
     
-    local encoded_path=$(urlencode "$WS_PATH")
-    local ws_link="vless://$WS_UUID@$WS_DOMAIN:443?encryption=none&security=tls&type=ws&host=$WS_DOMAIN&path=$encoded_path#$WS_NAME"
+    local ws_link="vless://$UUID@$WS_DOMAIN:443?encryption=none&security=tls&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo -e "$ws_link"
     echo ""
 
-    local reality_link="vless://$REALITY_UUID@$PUBLIC_IP:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#$REALITY_NAME"
+    local reality_link="vless://$UUID@$PUBLIC_IP:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#vless-reality"
     echo -e "$reality_link"
     echo ""
 
-    local hy2_link="hysteria2://$HY2_UUID@$PUBLIC_IP:$HY2_PORT?insecure=1&sni=$COMMON_SNI"
+    local hy2_link="hysteria2://$UUID@$PUBLIC_IP:$HY2_PORT?insecure=1&sni=$COMMON_SNI"
     if [[ "${HY2_HOP,,}" == "y" && -n "$HY2_PORTS" ]]; then
         hy2_link="${hy2_link}&ports=$HY2_PORTS"
     fi
-    hy2_link="${hy2_link}#$HY2_NAME"
+    hy2_link="${hy2_link}#hy2"
     echo -e "$hy2_link"
     echo ""
     echo -e "${YELLOW}复制链接到客户端即可使用（自签证书需开启跳过验证）${NC}"
