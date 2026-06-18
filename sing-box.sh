@@ -156,18 +156,22 @@ get_config_all() {
     info "配置 VLESS + WebSocket (无 TLS)"
     read -p "$(echo -e "${CYAN}域名:${NC} ")" WS_DOMAIN
     [[ -z $WS_DOMAIN ]] && error "域名不能为空"
+    echo "域名: $WS_DOMAIN"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" WS_PORT
     [[ -z $WS_PORT ]] && WS_PORT=$((RANDOM % 40001 + 10000))
+    echo "端口: $WS_PORT"
 
     echo ""
     info "配置 SNI（用于 TLS 伪装）"
     read -p "$(echo -e "${CYAN}SNI (默认 apple.com):${NC} ")" COMMON_SNI
     [[ -z $COMMON_SNI ]] && COMMON_SNI="apple.com"
+    echo "SNI: $COMMON_SNI"
 
     echo ""
     info "配置 Hysteria2"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" HY2_PORT
     [[ -z $HY2_PORT ]] && HY2_PORT=$((RANDOM % 40001 + 10000))
+    echo "端口: $HY2_PORT"
     read -p "$(echo -e "${CYAN}是否开启端口跳跃？(默认n) [y/n]:${NC} ")" HY2_HOP
     HY2_HOP=${HY2_HOP:-n}
     if [[ "${HY2_HOP,,}" == "y" ]]; then
@@ -177,6 +181,7 @@ get_config_all() {
             warn "端口范围格式错误，使用默认 10000-50000"
             HY2_PORTS="10000-50000"
         fi
+        echo "端口跳跃: ${HY2_HOP^^}"
     else
         HY2_PORTS=""
     fi
@@ -185,15 +190,8 @@ get_config_all() {
     info "配置 VLESS + Reality"
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" REALITY_PORT
     [[ -z $REALITY_PORT ]] && REALITY_PORT=$((RANDOM % 40001 + 10000))
+    echo "端口: $REALITY_PORT"
     REALITY_SID=$(openssl rand -hex 2)
-
-    echo ""
-    ok "配置信息汇总"
-    echo "  SNI: $COMMON_SNI"
-    echo "  WS 域名: $WS_DOMAIN"
-    echo "  VLESS-WS: 端口 $WS_PORT"
-    echo "  Hysteria2: 端口 $HY2_PORT, 端口跳跃: ${HY2_HOP^^}"
-    echo "  VLESS-Reality: 端口 $REALITY_PORT"
 }
 
 write_config() {
