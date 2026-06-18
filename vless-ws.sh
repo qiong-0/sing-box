@@ -178,7 +178,7 @@ EOF
         systemctl enable sing-box
         systemctl start sing-box
         ok "systemd 服务已启动"
-    else  # openrc
+    else
         cat > /etc/init.d/sing-box <<'EOF'
 #!/sbin/openrc-run
 name="sing-box"
