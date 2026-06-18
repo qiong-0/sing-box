@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #===============================================================================
-# 名称: sing-box 多协议一键安装脚本
+# 名称: sing-box 多协议一键安装脚本（修复版）
 # 功能: 一键安装 sing-box，支持 VLESS+WS、HY2+TLS、VLESS+Reality
 # 环境: 兼容 systemd / OpenRC，自动适配包管理器，支持 LXC 轻量容器
-# 用法: bash sing-box-multi-protocol.sh
+# 用法: bash sing-box-multi-protocol-fixed.sh
 #===============================================================================
 
 set -e
@@ -32,7 +32,6 @@ CERT_DIR="$CORE_DIR/certs"
 
 # 协议配置数组
 declare -a PROTOCOLS_TO_INSTALL=()
-declare -A PROTOCOL_CONFIGS=()
 
 # 检测包管理器
 detect_pkg_manager() {
@@ -93,7 +92,6 @@ detect_init() {
     elif command -v rc-service &>/dev/null; then
         INIT="openrc"
     elif [[ -f /etc/init.d/rc ]] || [[ -d /etc/init.d ]]; then
-        # 尝试 OpenRC 兼容模式
         INIT="openrc"
     else
         error "未检测到 systemd 或 OpenRC，请确认系统环境"
@@ -139,9 +137,17 @@ install_singbox() {
     ok "sing-box 安装完成: $($CORE_BIN version 2>/dev/null | head -n1 || echo 'unknown')"
 }
 
-# 生成随机端口
+# 生成随机端口（确保不重复）
 random_port() {
-    echo $((RANDOM % 40001 + 10000))
+    local port
+    while true; do
+        port=$((RANDOM % 40001 + 10000))
+        # 检查端口是否已被使用
+        if ! netstat -tuln 2>/dev/null | grep -q ":$port " && ! ss -tuln 2>/dev/null | grep -q ":$port "; then
+            echo $port
+            return
+        fi
+    done
 }
 
 # 协议选择菜单
@@ -206,6 +212,13 @@ get_vless_ws_config() {
     read -p "$(echo -e "${CYAN}端口 (回车使用基础端口 $GLOBAL_PORT):${NC} ")" VLESS_WS_PORT
     [[ -z $VLESS_WS_PORT ]] && VLESS_WS_PORT=$GLOBAL_PORT
     
+    # 如果端口已被占用，自动生成新端口
+    if netstat -tuln 2>/dev/null | grep -q ":$VLESS_WS_PORT " || ss -tuln 2>/dev/null | grep -q ":$VLESS_WS_PORT "; then
+        warn "端口 $VLESS_WS_PORT 已被占用，自动生成新端口..."
+        VLESS_WS_PORT=$(random_port)
+        ok "使用新端口: $VLESS_WS_PORT"
+    fi
+    
     read -p "$(echo -e "${CYAN}WebSocket 路径 (默认 /):${NC} ")" VLESS_WS_PATH
     [[ -z $VLESS_WS_PATH ]] && VLESS_WS_PATH="/"
     
@@ -224,6 +237,13 @@ get_hy2_config() {
     
     read -p "$(echo -e "${CYAN}端口 (回车使用基础端口 $GLOBAL_PORT):${NC} ")" HY2_PORT
     [[ -z $HY2_PORT ]] && HY2_PORT=$GLOBAL_PORT
+    
+    # 如果端口已被占用，自动生成新端口
+    if netstat -tuln 2>/dev/null | grep -q ":$HY2_PORT " || ss -tuln 2>/dev/null | grep -q ":$HY2_PORT "; then
+        warn "端口 $HY2_PORT 已被占用，自动生成新端口..."
+        HY2_PORT=$(random_port)
+        ok "使用新端口: $HY2_PORT"
+    fi
     
     # 端口跳跃选项
     echo -e "${CYAN}是否启用端口跳跃？(y/n)${NC}"
@@ -288,6 +308,13 @@ get_vless_reality_config() {
     
     read -p "$(echo -e "${CYAN}端口 (回车使用基础端口 $GLOBAL_PORT):${NC} ")" REALITY_PORT
     [[ -z $REALITY_PORT ]] && REALITY_PORT=$GLOBAL_PORT
+    
+    # 如果端口已被占用，自动生成新端口
+    if netstat -tuln 2>/dev/null | grep -q ":$REALITY_PORT " || ss -tuln 2>/dev/null | grep -q ":$REALITY_PORT "; then
+        warn "端口 $REALITY_PORT 已被占用，自动生成新端口..."
+        REALITY_PORT=$(random_port)
+        ok "使用新端口: $REALITY_PORT"
+    fi
     
     read -p "$(echo -e "${CYAN}节点名称 (默认 ${NODE_PREFIX}-Reality):${NC} ")" REALITY_REMARK
     [[ -z $REALITY_REMARK ]] && REALITY_REMARK="${NODE_PREFIX}-Reality"
@@ -517,6 +544,15 @@ EOF
 create_service() {
     info "创建系统服务..."
     
+    # 先停止旧服务
+    if [[ $INIT == "systemd" ]]; then
+        systemctl stop sing-box 2>/dev/null || true
+        systemctl disable sing-box 2>/dev/null || true
+    else
+        rc-service sing-box stop 2>/dev/null || true
+        rc-update del sing-box default 2>/dev/null || true
+    fi
+    
     if [[ $INIT == "systemd" ]]; then
         cat > /lib/systemd/system/sing-box.service <<EOF
 [Unit]
@@ -560,7 +596,7 @@ EOF
         ok "OpenRC 服务已创建并启动"
     fi
     
-    sleep 2
+    sleep 3
     
     # 检查服务状态
     if [[ $INIT == "systemd" ]]; then
@@ -568,12 +604,18 @@ EOF
             ok "服务运行正常"
         else
             warn "服务可能未正常启动，请检查配置"
+            echo -e "${YELLOW}错误信息:${NC}"
+            journalctl -u sing-box --no-pager -n 20 2>/dev/null || true
         fi
     else
         if rc-service sing-box status 2>/dev/null | grep -q "started"; then
             ok "服务运行正常"
         else
             warn "服务可能未正常启动，请检查配置"
+            echo -e "${YELLOW}错误信息:${NC}"
+            rc-service sing-box status 2>/dev/null || true
+            echo -e "${YELLOW}日志信息:${NC}"
+            tail -20 /var/log/sing-box/access.log 2>/dev/null || true
         fi
     fi
 }
@@ -656,7 +698,7 @@ main() {
     [[ $EUID -ne 0 ]] && error "请以 root 用户执行（使用 sudo -i）"
     
     bold "============================================"
-    bold "   Sing-Box 多协议一键安装脚本"
+    bold "   Sing-Box 多协议一键安装脚本（修复版）"
     bold "   支持: VLESS-WS | HY2-TLS | VLESS-Reality"
     bold "============================================"
     echo ""
