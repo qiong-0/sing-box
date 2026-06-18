@@ -117,12 +117,13 @@ get_config() {
     info "请输入配置信息"
     read -p "$(echo -e "${CYAN}域名:${NC} ")" DOMAIN
     [[ -z $DOMAIN ]] && error "域名不能为空"
-    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" PORT
-    if [[ -z $PORT ]]; then
-        PORT=$((RANDOM % 40001 + 10000))
-        ok "端口: $PORT"
-    fi
+    echo "域名: $DOMAIN"
+    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" WS_PORT
+    [[ -z $PORT ]] && PORT=$((RANDOM % 40001 + 10000))
+    echo "端口: $PORT"
     UUID=$(cat /proc/sys/kernel/random/uuid)
+    echo "UUID: $UUID"
+    echo ""
 }
 
 write_config() {
