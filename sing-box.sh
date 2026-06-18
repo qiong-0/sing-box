@@ -354,7 +354,7 @@ output_links() {
     echo ""
     echo -e "${GREEN}节点链接：${NC}"
     
-    local ws_link="vless://$UUID@$WS_DOMAIN:443?encryption=none&security=tls&type=ws&host=$WS_DOMAIN&path=#vless-ws"
+    local ws_link="vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=tls&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo -e "$ws_link"
     echo ""
 
