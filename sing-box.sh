@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #===============================================================================
 # 名称: sing-box_multi_protocol_install.sh
-# 功能: 一键安装 sing-box，同时配置 VLESS+WS(无TLS)、Hysteria2(TLS)、VLESS+Reality
+# 功能: 一键安装 sing-box，配置 VLESS+WS、VLESS+Reality、Hysteria2+TLS 三个协议
 # 环境: 兼容 systemd / OpenRC，自动适配包管理器
 # 用法: bash sing-box_multi_protocol_install.sh
 #===============================================================================
@@ -20,7 +20,7 @@ warn()  { echo -e "${YELLOW}警告:${NC} $*"; }
 info()  { echo -e "${CYAN}>>>${NC} $*"; }
 ok()    { echo -e "${GREEN}✓${NC} $*"; }
 
-# ===================== 原有函数（完全保留，未修改） =====================
+# 检测包管理器
 detect_pkg_manager() {
     if command -v apk &>/dev/null; then
         PKG_MANAGER="apk"
@@ -43,10 +43,11 @@ detect_pkg_manager() {
         INSTALL_CMD="zypper install -y"
         UPDATE_CMD="zypper refresh"
     else
-        error "不支持的包管理器，请手动安装 wget、tar、curl、openssl"
+        error "不支持的包管理器，请手动安装 wget、tar、curl"
     fi
 }
 
+# 安装必要工具
 install_deps() {
     local deps="wget tar curl"
     case $PKG_MANAGER in
@@ -66,6 +67,7 @@ install_deps() {
     command -v curl &>/dev/null || error "curl 安装失败"
 }
 
+# 检测 init 系统
 detect_init() {
     if command -v systemctl &>/dev/null; then
         INIT="systemd"
@@ -77,6 +79,7 @@ detect_init() {
     ok "init 系统: $INIT"
 }
 
+# 获取系统架构
 get_arch() {
     case $(uname -m) in
         x86_64|amd64) ARCH="amd64" ;;
@@ -86,6 +89,7 @@ get_arch() {
     ok "系统架构: $ARCH"
 }
 
+# 下载并安装 sing-box 二进制
 install_singbox() {
     local latest_url
     latest_url=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
@@ -102,32 +106,75 @@ install_singbox() {
     ok "sing-box 安装完成: $($CORE_BIN version | head -n1)"
 }
 
-# 原单协议配置（保留但不再调用）
+# 交互式获取配置
 get_config() {
     echo ""
     info "请输入配置信息"
     read -p "$(echo -e "${CYAN}域名 (必填):${NC} ")" DOMAIN
     [[ -z $DOMAIN ]] && error "域名不能为空"
-    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" PORT
-    if [[ -z $PORT ]]; then
-        PORT=$((RANDOM % 40001 + 10000))
-        ok "随机端口: $PORT"
+    
+    read -p "$(echo -e "${CYAN}VLESS+WS 端口 (回车随机 10000-50000):${NC} ")" WS_PORT
+    if [[ -z $WS_PORT ]]; then
+        WS_PORT=$((RANDOM % 40001 + 10000))
+        ok "随机 VLESS+WS 端口: $WS_PORT"
     fi
-    read -p "$(echo -e "${CYAN}WebSocket 路径 (默认 /):${NC} ")" WSPATH
+    read -p "$(echo -e "${CYAN}VLESS+WS WebSocket 路径 (默认 /):${NC} ")" WSPATH
     [[ -z $WSPATH ]] && WSPATH="/"
-    read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-WS):${NC} ")" REMARK
-    [[ -z $REMARK ]] && REMARK="VLESS-WS"
+    
+    read -p "$(echo -e "${CYAN}VLESS+Reality 端口 (回车随机 10000-50000):${NC} ")" REALITY_PORT
+    if [[ -z $REALITY_PORT ]]; then
+        REALITY_PORT=$((RANDOM % 40001 + 10000))
+        ok "随机 VLESS+Reality 端口: $REALITY_PORT"
+    fi
+    read -p "$(echo -e "${CYAN}VLESS+Reality 目标网站 (默认 www.google.com):${NC} ")" REALITY_DEST
+    [[ -z $REALITY_DEST ]] && REALITY_DEST="www.google.com"
+    # 自动获取目标网站 IP
+    REALITY_DEST_IP=$(dig +short $REALITY_DEST | head -n1)
+    [[ -z $REALITY_DEST_IP ]] && REALITY_DEST_IP="1.1.1.1"
+    REALITY_SERVER_NAME=$(echo $REALITY_DEST | cut -d. -f1)
+    
+    read -p "$(echo -e "${CYAN}Hysteria2 端口 (回车随机 10000-50000):${NC} ")" HY2_PORT
+    if [[ -z $HY2_PORT ]]; then
+        HY2_PORT=$((RANDOM % 40001 + 10000))
+        ok "随机 Hysteria2 端口: $HY2_PORT"
+    fi
+    read -p "$(echo -e "${CYAN}Hysteria2 是否启用端口跳跃? (y/n, 默认 n):${NC} ")" HY2_HOP
+    if [[ "$HY2_HOP" =~ ^[Yy]$ ]]; then
+        HY2_HOP_ENABLED=true
+        read -p "$(echo -e "${CYAN}Hysteria2 端口跳跃范围 (例如 10000-20000):${NC} ")" HY2_HOP_RANGE
+        [[ -z $HY2_HOP_RANGE ]] && HY2_HOP_RANGE="10000-20000"
+    else
+        HY2_HOP_ENABLED=false
+    fi
+    
+    read -p "$(echo -e "${CYAN}节点名称前缀 (默认使用协议名称):${NC} ")" NODE_PREFIX
+    
+    # 生成 UUID
     UUID=$(cat /proc/sys/kernel/random/uuid)
+    # 生成 Reality 的密钥对
+    REALITY_KEYPAIR=$($CORE_BIN generate reality-keypair)
+    REALITY_PRIVATE_KEY=$(echo "$REALITY_KEYPAIR" | grep "PrivateKey" | awk '{print $2}')
+    REALITY_PUBLIC_KEY=$(echo "$REALITY_KEYPAIR" | grep "PublicKey" | awk '{print $2}')
+    # 生成 Reality 的 shortId
+    REALITY_SHORT_ID=$($CORE_BIN generate rand --hex 8)
+    
     echo ""
     ok "配置信息"
     echo "  域名: $DOMAIN"
-    echo "  端口: $PORT"
-    echo "  路径: $WSPATH"
+    echo "  VLESS+WS 端口: $WS_PORT, 路径: $WSPATH"
+    echo "  VLESS+Reality 端口: $REALITY_PORT, 目标: $REALITY_DEST"
+    echo "  Hysteria2 端口: $HY2_PORT, 端口跳跃: $HY2_HOP_ENABLED"
     echo "  UUID: $UUID"
-    echo "  节点名: $REMARK"
 }
 
+# 生成 config.json
 write_config() {
+    # 构建 Hysteria2 配置
+    local hy2_hop_config=""
+    if [[ "$HY2_HOP_ENABLED" == true ]]; then
+        hy2_hop_config=',"ports": "'$HY2_HOP_RANGE'"'
+    fi
+    
     cat > "$CONFIG_JSON" <<EOF
 {
   "log": {
@@ -140,7 +187,7 @@ write_config() {
       "type": "vless",
       "tag": "VLESS-WS-in",
       "listen": "::",
-      "listen_port": $PORT,
+      "listen_port": $WS_PORT,
       "users": [
         {
           "uuid": "$UUID",
@@ -154,6 +201,52 @@ write_config() {
           "Host": "$DOMAIN"
         }
       }
+    },
+    {
+      "type": "vless",
+      "tag": "VLESS-Reality-in",
+      "listen": "::",
+      "listen_port": $REALITY_PORT,
+      "users": [
+        {
+          "uuid": "$UUID",
+          "flow": "xtls-rprx-vision"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "$REALITY_SERVER_NAME",
+        "reality": {
+          "enabled": true,
+          "handshake": {
+            "server": "$REALITY_DEST",
+            "server_port": 443
+          },
+          "private_key": "$REALITY_PRIVATE_KEY",
+          "short_id": ["$REALITY_SHORT_ID"]
+        }
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "HY2-in",
+      "listen": "::",
+      "listen_port": $HY2_PORT,
+      "users": [
+        {
+          "password": "$UUID"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "$DOMAIN",
+        "acme": {
+          "domain": "$DOMAIN",
+          "email": "admin@$DOMAIN",
+          "data_path": "$CORE_DIR/cert",
+          "force_rsa": false
+        }
+      }$hy2_hop_config
     }
   ],
   "outbounds": [
@@ -167,7 +260,15 @@ EOF
     ok "配置文件已生成: $CONFIG_JSON"
 }
 
+# 创建服务 (systemd 或 openrc)
 create_service() {
+    # 停止旧服务
+    if [[ $INIT == "systemd" ]]; then
+        systemctl stop sing-box 2>/dev/null || true
+    else
+        rc-service sing-box stop 2>/dev/null || true
+    fi
+    
     if [[ $INIT == "systemd" ]]; then
         cat > /lib/systemd/system/sing-box.service <<EOF
 [Unit]
@@ -188,7 +289,7 @@ EOF
         systemctl enable sing-box
         systemctl start sing-box
         ok "systemd 服务已启动"
-    else
+    else  # openrc
         cat > /etc/init.d/sing-box <<'EOF'
 #!/sbin/openrc-run
 name="sing-box"
@@ -211,6 +312,7 @@ EOF
     fi
 
     sleep 2
+    # 检查服务状态
     if [[ $INIT == "systemd" ]] && systemctl is-active --quiet sing-box; then
         ok "服务运行正常"
     elif [[ $INIT == "openrc" ]] && rc-service sing-box status | grep -q "started"; then
@@ -220,304 +322,65 @@ EOF
     fi
 }
 
+# 生成 vless 链接
 output_link() {
+    # URL 编码路径
     encoded_path=$(echo -n "$WSPATH" | sed 's/ /%20/g; s/!/%21/g; s/#/%23/g; s/\$/%24/g; s/&/%26/g; s/'\''/%27/g; s/(/%28/g; s/)/%29/g; s/*/%2A/g; s/+/%2B/g; s/,/%2C/g; s/\//%2F/g; s/:/%3A/g; s/;/%3B/g; s/=/%3D/g; s/?/%3F/g; s/@/%40/g; s/\[/%5B/g; s/\]/%5D/g')
-    local vless_link="vless://$UUID@$DOMAIN:$PORT?encryption=none&security=none&type=ws&host=$DOMAIN&path=$encoded_path#$REMARK"
+    
+    # VLESS+WS 链接
+    local ws_remark="${NODE_PREFIX:-VLESS-WS}"
+    local ws_link="vless://$UUID@$DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$DOMAIN&path=$encoded_path#$ws_remark"
+    
+    # VLESS+Reality 链接
+    local reality_remark="${NODE_PREFIX:-VLESS-Reality}"
+    local reality_link="vless://$UUID@$REALITY_DEST_IP:$REALITY_PORT?encryption=none&security=reality&type=tcp&sni=$REALITY_SERVER_NAME&fp=chrome&pbk=$REALITY_PUBLIC_KEY&sid=$REALITY_SHORT_ID&spx=%2F#$reality_remark"
+    
+    # Hysteria2 链接
+    local hy2_remark="${NODE_PREFIX:-HY2}"
+    local hy2_link="hysteria2://$UUID@$DOMAIN:$HY2_PORT?insecure=1&sni=$DOMAIN#$hy2_remark"
+    if [[ "$HY2_HOP_ENABLED" == true ]]; then
+        hy2_link="hysteria2://$UUID@$DOMAIN:$HY2_PORT?insecure=1&sni=$DOMAIN&ports=$HY2_HOP_RANGE#$hy2_remark"
+    fi
+    
     echo ""
     echo -e "${GREEN}=========================================${NC}"
-    echo -e "${GREEN}              VLESS 链接                ${NC}"
+    echo -e "${GREEN}            生成的链接                   ${NC}"
     echo -e "${GREEN}=========================================${NC}"
-    echo -e "${CYAN}$vless_link${NC}"
+    echo ""
+    echo -e "${CYAN}【VLESS+WS】${NC}"
+    echo -e "$ws_link"
+    echo ""
+    echo -e "${CYAN}【VLESS+Reality】${NC}"
+    echo -e "$reality_link"
+    echo ""
+    echo -e "${CYAN}【Hysteria2】${NC}"
+    echo -e "$hy2_link"
     echo ""
     echo -e "${YELLOW}提示: 复制上述链接到客户端即可使用${NC}"
 }
 
-# ===================== 新增功能（多协议） =====================
-
-# 安装额外依赖（openssl）
-install_extra_deps() {
-    local extra="openssl"
-    case $PKG_MANAGER in
-        apk) $INSTALL_CMD $extra ;;
-        apt) $UPDATE_CMD && $INSTALL_CMD $extra ;;
-        yum|dnf) $UPDATE_CMD && $INSTALL_CMD $extra ;;
-        zypper) $UPDATE_CMD && $INSTALL_CMD $extra ;;
-    esac
-    command -v openssl &>/dev/null || error "openssl 安装失败"
-}
-
-# URL 编码（复用原逻辑）
-url_encode() {
-    echo -n "$1" | sed 's/ /%20/g; s/!/%21/g; s/#/%23/g; s/\$/%24/g; s/&/%26/g; s/'\''/%27/g; s/(/%28/g; s/)/%29/g; s/*/%2A/g; s/+/%2B/g; s/,/%2C/g; s/\//%2F/g; s/:/%3A/g; s/;/%3B/g; s/=/%3D/g; s/?/%3F/g; s/@/%40/g; s/\[/%5B/g; s/\]/%5D/g'
-}
-
 # 清理旧配置
-clean_previous() {
-    info "清理之前的配置..."
-    if [[ $INIT == "systemd" ]]; then
+clean_old_config() {
+    info "清理旧配置..."
+    # 停止服务
+    if [[ $INIT == "systemd" ]] && command -v systemctl &>/dev/null; then
         systemctl stop sing-box 2>/dev/null || true
         systemctl disable sing-box 2>/dev/null || true
-        rm -f /lib/systemd/system/sing-box.service
-        systemctl daemon-reload
-    elif [[ $INIT == "openrc" ]]; then
+    elif [[ $INIT == "openrc" ]] && command -v rc-service &>/dev/null; then
         rc-service sing-box stop 2>/dev/null || true
         rc-update del sing-box 2>/dev/null || true
-        rm -f /etc/init.d/sing-box
     fi
+    # 删除旧配置目录
     rm -rf "$CORE_DIR"
-    rm -rf "$LOG_DIR"
+    # 删除旧服务文件
+    rm -f /lib/systemd/system/sing-box.service 2>/dev/null || true
+    rm -f /etc/init.d/sing-box 2>/dev/null || true
     ok "清理完成"
 }
 
-# 获取公共域名
-get_public_domain() {
-    echo ""
-    info "请输入公共域名（所有协议共用，用于客户端连接）"
-    read -p "$(echo -e "${CYAN}域名 (必填):${NC} ")" PUBLIC_DOMAIN
-    [[ -z $PUBLIC_DOMAIN ]] && error "域名不能为空"
-}
-
-# 获取 VLESS+WS 配置
-get_ws_config() {
-    echo ""
-    info "--- 配置 VLESS+WS (无 TLS) ---"
-    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" WS_PORT
-    [[ -z $WS_PORT ]] && WS_PORT=$((RANDOM % 40001 + 10000))
-    read -p "$(echo -e "${CYAN}WebSocket 路径 (默认 /):${NC} ")" WS_PATH
-    [[ -z $WS_PATH ]] && WS_PATH="/"
-    read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-WS):${NC} ")" WS_REMARK
-    [[ -z $WS_REMARK ]] && WS_REMARK="VLESS-WS"
-    WS_UUID=$(cat /proc/sys/kernel/random/uuid)
-    ok "WS 端口: $WS_PORT, 路径: $WS_PATH, UUID: $WS_UUID"
-}
-
-# 获取 Hysteria2 配置
-get_hy2_config() {
-    echo ""
-    info "--- 配置 Hysteria2 (TLS, 自签名证书) ---"
-    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" HY2_PORT
-    [[ -z $HY2_PORT ]] && HY2_PORT=$((RANDOM % 40001 + 10000))
-    read -p "$(echo -e "${CYAN}是否开启端口跳跃? (y/n, 默认 n):${NC} ")" HY2_JUMP_ENABLE
-    HY2_JUMP_ENABLE=${HY2_JUMP_ENABLE:-n}
-    if [[ $HY2_JUMP_ENABLE == "y" || $HY2_JUMP_ENABLE == "Y" ]]; then
-        read -p "$(echo -e "${CYAN}起始端口 (默认 $((HY2_PORT+1))):${NC} ")" HY2_JUMP_START
-        [[ -z $HY2_JUMP_START ]] && HY2_JUMP_START=$((HY2_PORT+1))
-        read -p "$(echo -e "${CYAN}结束端口 (默认 $((HY2_JUMP_START+99))):${NC} ")" HY2_JUMP_END
-        [[ -z $HY2_JUMP_END ]] && HY2_JUMP_END=$((HY2_JUMP_START+99))
-        # 确保起始 <= 结束
-        if [[ $HY2_JUMP_START -gt $HY2_JUMP_END ]]; then
-            local tmp=$HY2_JUMP_START
-            HY2_JUMP_START=$HY2_JUMP_END
-            HY2_JUMP_END=$tmp
-        fi
-        ok "端口跳跃范围: $HY2_JUMP_START-$HY2_JUMP_END"
-    fi
-    read -p "$(echo -e "${CYAN}节点名称 (默认 HY2):${NC} ")" HY2_REMARK
-    [[ -z $HY2_REMARK ]] && HY2_REMARK="HY2"
-    HY2_PASSWORD=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 16 | head -n1)
-    ok "HY2 端口: $HY2_PORT, 密码: $HY2_PASSWORD"
-}
-
-# 获取 VLESS+Reality 配置
-get_reality_config() {
-    echo ""
-    info "--- 配置 VLESS+Reality ---"
-    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" REALITY_PORT
-    [[ -z $REALITY_PORT ]] && REALITY_PORT=$((RANDOM % 40001 + 10000))
-    read -p "$(echo -e "${CYAN}目标网站 (dest, 默认 www.cloudflare.com):${NC} ")" REALITY_DEST
-    [[ -z $REALITY_DEST ]] && REALITY_DEST="www.cloudflare.com"
-    read -p "$(echo -e "${CYAN}SNI (server_name, 默认与目标相同):${NC} ")" REALITY_SNI
-    [[ -z $REALITY_SNI ]] && REALITY_SNI="$REALITY_DEST"
-    read -p "$(echo -e "${CYAN}节点名称 (默认 VLESS-REALITY):${NC} ")" REALITY_REMARK
-    [[ -z $REALITY_REMARK ]] && REALITY_REMARK="VLESS-REALITY"
-    REALITY_UUID=$(cat /proc/sys/kernel/random/uuid)
-    REALITY_SID=$(tr -dc 'a-f0-9' < /dev/urandom | fold -w 8 | head -n1)
-    ok "Reality 端口: $REALITY_PORT, 目标: $REALITY_DEST, SNI: $REALITY_SNI"
-}
-
-# 生成自签名证书 (用于 HY2)
-generate_self_signed_cert() {
-    local cert_dir="$CORE_DIR/cert"
-    mkdir -p "$cert_dir"
-    local cert_file="$cert_dir/cert.crt"
-    local key_file="$cert_dir/private.key"
-    # 生成 10 年有效期的自签名证书
-    openssl req -x509 -nodes -days 3650 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-        -keyout "$key_file" -out "$cert_file" -subj "/CN=$PUBLIC_DOMAIN" 2>/dev/null
-    chmod 600 "$key_file"
-    chmod 644 "$cert_file"
-    ok "自签名证书生成: $cert_file"
-    HY2_CERT="$cert_file"
-    HY2_KEY="$key_file"
-}
-
-# 生成 Reality 密钥对
-generate_reality_keys() {
-    local keypair
-    keypair=$("$CORE_BIN" generate reality-keypair)
-    REALITY_PRIVATE_KEY=$(echo "$keypair" | grep -oP 'PrivateKey:\s*\K.*' | head -1)
-    REALITY_PUBLIC_KEY=$(echo "$keypair" | grep -oP 'PublicKey:\s*\K.*' | head -1)
-    if [[ -z $REALITY_PRIVATE_KEY || -z $REALITY_PUBLIC_KEY ]]; then
-        error "Reality 密钥生成失败"
-    fi
-    ok "Reality 密钥对生成成功"
-}
-
-# 写入多协议配置文件
-write_multi_config() {
-    # 构建 WS inbound
-    local ws_inbound=$(cat <<EOF
-    {
-      "type": "vless",
-      "tag": "VLESS-WS-in",
-      "listen": "::",
-      "listen_port": $WS_PORT,
-      "users": [
-        {
-          "uuid": "$WS_UUID",
-          "flow": ""
-        }
-      ],
-      "transport": {
-        "type": "ws",
-        "path": "$WS_PATH",
-        "headers": {
-          "Host": "$PUBLIC_DOMAIN"
-        }
-      }
-    }
-EOF
-)
-
-    # 构建 HY2 inbound
-    local hy2_inbound=""
-    if [[ $HY2_JUMP_ENABLE == "y" || $HY2_JUMP_ENABLE == "Y" ]]; then
-        hy2_inbound=$(cat <<EOF
-    {
-      "type": "hysteria2",
-      "tag": "HY2-in",
-      "listen": "::",
-      "listen_port": $HY2_PORT,
-      "ports": ["$HY2_JUMP_START-$HY2_JUMP_END"],
-      "users": [
-        {
-          "password": "$HY2_PASSWORD"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "certificate_path": "$HY2_CERT",
-        "key_path": "$HY2_KEY"
-      }
-    }
-EOF
-)
-    else
-        hy2_inbound=$(cat <<EOF
-    {
-      "type": "hysteria2",
-      "tag": "HY2-in",
-      "listen": "::",
-      "listen_port": $HY2_PORT,
-      "users": [
-        {
-          "password": "$HY2_PASSWORD"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "certificate_path": "$HY2_CERT",
-        "key_path": "$HY2_KEY"
-      }
-    }
-EOF
-)
-    fi
-
-    # 构建 Reality inbound
-    local reality_inbound=$(cat <<EOF
-    {
-      "type": "vless",
-      "tag": "REALITY-in",
-      "listen": "::",
-      "listen_port": $REALITY_PORT,
-      "users": [
-        {
-          "uuid": "$REALITY_UUID",
-          "flow": "xtls-rprx-vision"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "$REALITY_SNI",
-        "reality": {
-          "enabled": true,
-          "dest": "$REALITY_DEST:443",
-          "private_key": "$REALITY_PRIVATE_KEY",
-          "short_id": ["$REALITY_SID"]
-        }
-      }
-    }
-EOF
-)
-
-    # 生成完整 config.json
-    cat > "$CONFIG_JSON" <<EOF
-{
-  "log": {
-    "level": "none"
-  },
-  "inbounds": [
-$ws_inbound,
-$hy2_inbound,
-$reality_inbound
-  ],
-  "outbounds": [
-    {
-      "type": "direct",
-      "tag": "direct"
-    }
-  ]
-}
-EOF
-    ok "多协议配置文件已生成: $CONFIG_JSON"
-}
-
-# 输出所有链接
-output_links() {
-    echo ""
-    echo -e "${GREEN}=========================================${NC}"
-    echo -e "${GREEN}            生成的客户端链接             ${NC}"
-    echo -e "${GREEN}=========================================${NC}"
-
-    # 1. VLESS+WS
-    local encoded_ws_path=$(url_encode "$WS_PATH")
-    local ws_link="vless://$WS_UUID@$PUBLIC_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$PUBLIC_DOMAIN&path=$encoded_ws_path#$WS_REMARK"
-    echo -e "${CYAN}[VLESS+WS]${NC}"
-    echo -e "$ws_link"
-    echo ""
-
-    # 2. Hysteria2
-    local hy2_link="hysteria2://$HY2_PASSWORD@$PUBLIC_DOMAIN:$HY2_PORT?insecure=1&sni=$PUBLIC_DOMAIN"
-    if [[ $HY2_JUMP_ENABLE == "y" || $HY2_JUMP_ENABLE == "Y" ]]; then
-        hy2_link="${hy2_link}&mport=$HY2_JUMP_START-$HY2_JUMP_END"
-    fi
-    hy2_link="${hy2_link}#$HY2_REMARK"
-    echo -e "${CYAN}[Hysteria2]${NC}"
-    echo -e "$hy2_link"
-    echo ""
-
-    # 3. VLESS+Reality
-    local reality_link="vless://$REALITY_UUID@$PUBLIC_DOMAIN:$REALITY_PORT?encryption=none&security=reality&sni=$REALITY_SNI&fp=chrome&pbk=$REALITY_PUBLIC_KEY&sid=$REALITY_SID&type=tcp&flow=xtls-rprx-vision#$REALITY_REMARK"
-    echo -e "${CYAN}[VLESS+Reality]${NC}"
-    echo -e "$reality_link"
-    echo ""
-
-    echo -e "${YELLOW}提示: 复制对应链接到客户端即可使用${NC}"
-}
-
-# ===================== 主流程（重写） =====================
+# 主流程
 main() {
+    # 检查 root
     [[ $EUID -ne 0 ]] && error "请以 root 用户执行（使用 sudo -i）"
 
     # 全局变量
@@ -529,36 +392,17 @@ main() {
 
     detect_pkg_manager
     install_deps
-    install_extra_deps        # 额外安装 openssl
     get_arch
     detect_init
-
-    # 清理旧配置（必须在安装前，因为安装时会创建目录）
-    clean_previous
-
-    # 安装 sing-box（会创建目录）
+    
+    # 清理旧配置
+    clean_old_config
+    
     install_singbox
-
-    # 获取公共配置
-    get_public_domain
-
-    # 获取各协议配置
-    get_ws_config
-    get_hy2_config
-    get_reality_config
-
-    # 生成证书和密钥（依赖 CORE_BIN 和 PUBLIC_DOMAIN）
-    generate_self_signed_cert
-    generate_reality_keys
-
-    # 写入多协议配置
-    write_multi_config
-
-    # 创建服务（原函数，使用新配置文件）
+    get_config
+    write_config
     create_service
-
-    # 输出链接
-    output_links
+    output_link
 }
 
 main "$@"
