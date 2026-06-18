@@ -341,6 +341,7 @@ urlencode() {
 }
 
 get_public_ip() {
+    echo ""
     info "正在获取公网 IP ..."
     PUBLIC_IP=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 icanhazip.com 2>/dev/null)
     if [ -z "$PUBLIC_IP" ]; then
