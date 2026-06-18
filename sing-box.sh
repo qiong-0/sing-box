@@ -358,10 +358,8 @@ urlencode() {
 
 output_links() {
     echo ""
-    echo -e "${GREEN}=========================================${NC}"
-    echo -e "${GREEN}              VLESS 链接                ${NC}"
-    echo -e "${GREEN}=========================================${NC}"
-
+    echo -e "${GREEN}节点链接：${NC}"
+    
     local encoded_path=$(urlencode "$WS_PATH")
     local ws_link="vless://$WS_UUID@$WS_DOMAIN:443?encryption=none&security=tls&type=ws&host=$WS_DOMAIN&path=$encoded_path#$WS_NAME"
     echo -e "$ws_link"
