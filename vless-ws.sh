@@ -121,9 +121,9 @@ write_config() {
     cat > "$CONFIG_JSON" <<EOF
 {
   "log": {
-    "level": "info",
-    "output": "$LOG_DIR/access.log",
-    "timestamp": true
+    "level": "error",
+    "output": "/dev/null",
+    "timestamp": false
   },
   "inbounds": [
     {
@@ -158,6 +158,16 @@ EOF
 }
 
 create_service() {
+    # ===== 新增：交互式输入 GOMEMLIMIT 和 GOGC ===== #
+    echo ""                                                          # <-- 新增
+    info "配置 Go 内存优化参数（小内存环境推荐）"                    # <-- 新增
+    read -p "$(echo -e "${CYAN}GOMEMLIMIT 数值 (默认 128，单位 MiB):${NC} ")" input_gomemlimit   # <-- 新增
+    GOMEMLIMIT="${input_gomemlimit:-128}MiB"                        # <-- 新增（自动追加 MiB）
+    read -p "$(echo -e "${CYAN}GOGC 数值 (默认 75):${NC} ")" input_gogc   # <-- 新增
+    GOGC="${input_gogc:-75}"                                        # <-- 新增
+    echo -e "${GREEN}✅ 将使用 GOMEMLIMIT=$GOMEMLIMIT, GOGC=$GOGC${NC}"   # <-- 新增
+    # ===== 新增结束 ===== #
+
     if [[ $INIT == "systemd" ]]; then
         cat > /lib/systemd/system/sing-box.service <<EOF
 [Unit]
@@ -167,6 +177,10 @@ After=network.target
 [Service]
 Type=simple
 User=root
+
+Environment="GOMEMLIMIT=$GOMEMLIMIT"          # <-- 新增
+Environment="GOGC=$GOGC"                      # <-- 新增
+
 ExecStart=$CORE_BIN run -c $CONFIG_JSON
 Restart=on-failure
 RestartSec=5s
@@ -188,6 +202,10 @@ command_args="run -c CONFIG_JSON_PLACEHOLDER"
 command_user="root"
 pidfile="/run/${RC_SVCNAME}.pid"
 command_background=true
+
+export GOMEMLIMIT="$GOMEMLIMIT"               # <-- 新增
+export GOGC="$GOGC"                           # <-- 新增
+
 depend() {
     need net
 }
