@@ -158,7 +158,6 @@ EOF
 }
 
 create_service() {
-
     echo ""
     info "配置 Go 内存优化参数（降低 Alpine/LXC 小内存环境在高速率下崩溃或断流的概率）"
     read -p "$(echo -e "${CYAN}GOMEMLIMIT 数值 (默认 128，单位 MiB):${NC} ")" input_gomemlimit
@@ -220,7 +219,7 @@ EOF
     elif [[ $INIT == "openrc" ]] && rc-service sing-box status | grep -q "started"; then
         ok "服务运行正常"
     else
-        warn "服务可能未正常启动，请检查日志"
+        warn "服务可能未正常启动，请手动运行 '$CORE_BIN run -c $CONFIG_JSON' 检查错误"
     fi
 }
 
