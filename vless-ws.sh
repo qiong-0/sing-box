@@ -109,7 +109,7 @@ get_config() {
     read -p "$(echo -e "${CYAN}域名:${NC} ")" DOMAIN
     [[ -z $DOMAIN ]] && error "域名不能为空"
     echo "域名: $DOMAIN"
-    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" WS_PORT
+    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" PORT
     [[ -z $PORT ]] && PORT=$((RANDOM % 40001 + 10000))
     echo "端口: $PORT"
     UUID=$(cat /proc/sys/kernel/random/uuid)
@@ -158,15 +158,15 @@ EOF
 }
 
 create_service() {
-    # ===== 新增：交互式输入 GOMEMLIMIT 和 GOGC ===== #
-    echo ""                                                          # <-- 新增
-    info "配置 Go 内存优化参数（小内存环境推荐）"                    # <-- 新增
-    read -p "$(echo -e "${CYAN}GOMEMLIMIT 数值 (默认 128，单位 MiB):${NC} ")" input_gomemlimit   # <-- 新增
-    GOMEMLIMIT="${input_gomemlimit:-128}MiB"                        # <-- 新增（自动追加 MiB）
-    read -p "$(echo -e "${CYAN}GOGC 数值 (默认 75):${NC} ")" input_gogc   # <-- 新增
-    GOGC="${input_gogc:-75}"                                        # <-- 新增
-    echo -e "${GREEN}✅ 将使用 GOMEMLIMIT=$GOMEMLIMIT, GOGC=$GOGC${NC}"   # <-- 新增
-    # ===== 新增结束 ===== #
+
+    echo ""
+    info "配置 Go 内存优化参数（降低 Alpine/LXC 小内存环境在高速率下崩溃或断流的概率）"
+    read -p "$(echo -e "${CYAN}GOMEMLIMIT 数值 (默认 128，单位 MiB):${NC} ")" input_gomemlimit
+    GOMEMLIMIT="${input_gomemlimit:-128}MiB"
+    read -p "$(echo -e "${CYAN}GOGC 数值 (默认 75):${NC} ")" input_gogc
+    GOGC="${input_gogc:-75}"
+    echo -e "${GREEN}✅ 将使用 GOMEMLIMIT=$GOMEMLIMIT, GOGC=$GOGC${NC}"
+    echo ""
 
     if [[ $INIT == "systemd" ]]; then
         cat > /lib/systemd/system/sing-box.service <<EOF
@@ -177,10 +177,8 @@ After=network.target
 [Service]
 Type=simple
 User=root
-
-Environment="GOMEMLIMIT=$GOMEMLIMIT"          # <-- 新增
-Environment="GOGC=$GOGC"                      # <-- 新增
-
+Environment="GOMEMLIMIT=$GOMEMLIMIT"
+Environment="GOGC=$GOGC"
 ExecStart=$CORE_BIN run -c $CONFIG_JSON
 Restart=on-failure
 RestartSec=5s
@@ -202,10 +200,8 @@ command_args="run -c CONFIG_JSON_PLACEHOLDER"
 command_user="root"
 pidfile="/run/${RC_SVCNAME}.pid"
 command_background=true
-
-export GOMEMLIMIT="$GOMEMLIMIT"               # <-- 新增
-export GOGC="$GOGC"                           # <-- 新增
-
+export GOMEMLIMIT="$GOMEMLIMIT"
+export GOGC="$GOGC"
 depend() {
     need net
 }
