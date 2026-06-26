@@ -335,6 +335,15 @@ setup_iptables() {
 }
 
 create_service() {
+    echo ""
+    info "配置 Go 内存优化参数（降低 Alpine/LXC 小内存环境在高速率下崩溃或断流的概率）"
+    read -p "$(echo -e "${CYAN}GOMEMLIMIT 数值 (默认 128，单位 MiB):${NC} ")" input_gomemlimit
+    GOMEMLIMIT="${input_gomemlimit:-128}MiB"
+    read -p "$(echo -e "${CYAN}GOGC 数值 (默认 75):${NC} ")" input_gogc
+    GOGC="${input_gogc:-75}"
+    echo -e "${GREEN}✅ 将使用 GOMEMLIMIT=$GOMEMLIMIT, GOGC=$GOGC${NC}"
+    echo ""
+    
     if [[ $INIT == "systemd" ]]; then
         cat > /lib/systemd/system/sing-box.service <<EOF
 [Unit]
@@ -344,6 +353,8 @@ After=network.target
 [Service]
 Type=simple
 User=root
+Environment="GOMEMLIMIT=$GOMEMLIMIT"
+Environment="GOGC=$GOGC"
 ExecStart=$CORE_BIN run -c $CONFIG_JSON
 Restart=on-failure
 RestartSec=5s
@@ -365,6 +376,8 @@ command_args="run -c CONFIG_JSON_PLACEHOLDER"
 command_user="root"
 pidfile="/run/${RC_SVCNAME}.pid"
 command_background=true
+export GOMEMLIMIT="$GOMEMLIMIT"
+export GOGC="$GOGC"
 depend() {
     need net
 }
