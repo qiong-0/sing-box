@@ -72,20 +72,69 @@ get_arch() {
 }
 
 uninstall_old() {
-    if [ -d "$CORE_DIR" ]; then
-        warn "检测到已安装的 sing-box，执行卸载..."
-        if [ "$INIT" = "systemd" ]; then
-            systemctl stop sing-box 2>/dev/null || true
-            systemctl disable sing-box 2>/dev/null || true
-            rm -f /lib/systemd/system/sing-box.service
-        elif [ "$INIT" = "openrc" ]; then
-            rc-service sing-box stop 2>/dev/null || true
-            rc-update del sing-box 2>/dev/null || true
-            rm -f /etc/init.d/sing-box
-        fi
-        rm -rf "$CORE_DIR" "$LOG_DIR"
-        ok "旧版本已卸载"
+    echo -e "${INFO} 检测到已安装的 sing-box，执行卸载..."
+
+    if systemctl list-units --full -all | grep -q "sing-box.service"; then
+        systemctl stop sing-box 2>/dev/null
+        systemctl disable sing-box 2>/dev/null
+        echo -e "${INFO} 已停止并禁用 systemd 服务"
     fi
+
+    if [ -f /etc/init.d/sing-box ]; then
+        rc-service sing-box stop 2>/dev/null
+        rc-update del sing-box 2>/dev/null
+        echo -e "${INFO} 已停止并禁用 OpenRC 服务"
+    fi
+
+    rm -f /lib/systemd/system/sing-box.service
+    rm -f /etc/systemd/system/multi-user.target.wants/sing-box.service
+    systemctl daemon-reload 2>/dev/null
+    echo -e "${INFO} 已删除 systemd 服务文件"
+
+    rm -f /etc/init.d/sing-box
+    echo -e "${INFO} 已删除 OpenRC 脚本"
+
+    if [ -d "$CORE_DIR" ]; then
+        rm -rf "$CORE_DIR"
+        echo -e "${INFO} 已删除核心目录 $CORE_DIR"
+    fi
+
+    if [ -d "$LOG_DIR" ]; then
+        rm -rf "$LOG_DIR"
+        echo -e "${INFO} 已删除日志目录 $LOG_DIR"
+    fi
+
+    for bin in /usr/local/bin/sing-box /usr/bin/sing-box; do
+        if [ -f "$bin" ]; then
+            rm -f "$bin"
+            echo -e "${INFO} 已删除二进制文件 $bin"
+        fi
+    done
+
+    if id "sing-box" &>/dev/null; then
+        userdel sing-box 2>/dev/null
+        echo -e "${INFO} 已删除用户 sing-box"
+    fi
+    if getent group sing-box &>/dev/null; then
+        groupdel sing-box 2>/dev/null
+        echo -e "${INFO} 已删除组 sing-box"
+    fi
+）
+    if command -v iptables &>/dev/null; then
+        if iptables-save | grep -q "sing-box"; then
+            iptables-save | grep -v "sing-box" | iptables-restore
+            echo -e "${INFO} 已清理 iptables 规则"
+        fi
+    fi
+    
+    if command -v crontab &>/dev/null; then
+        if crontab -l 2>/dev/null | grep -q "sing-box"; then
+            crontab -l 2>/dev/null | grep -v "sing-box" | crontab -
+            echo -e "${INFO} 已清理 crontab 任务"
+        fi
+    fi
+    
+    echo -e "${INFO} 旧版本已卸载。"
 }
 
 install_singbox() {
