@@ -367,7 +367,7 @@ EOF
         systemctl start sing-box
         ok "systemd 服务已启动"
     else
-        cat > /etc/init.d/sing-box <<'EOF'
+        cat > /etc/init.d/sing-box <<EOF
 #!/sbin/openrc-run
 name="sing-box"
 description="sing-box proxy service"
