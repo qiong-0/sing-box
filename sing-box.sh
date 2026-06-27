@@ -84,21 +84,6 @@ uninstall_old() {
             rm -f /etc/init.d/sing-box
         fi
         rm -rf "$CORE_DIR" "$LOG_DIR"
-        
-        if command -v iptables &>/dev/null && iptables-save &>/dev/null; then
-        if iptables-save | grep -q "sing-box"; then
-            iptables-save | grep -v "sing-box" | iptables-restore
-            echo -e "${INFO} 已清理 iptables 规则"
-        fi
-        fi
-        
-        if command -v crontab &>/dev/null; then
-        if crontab -l 2>/dev/null | grep -q "sing-box"; then
-            crontab -l 2>/dev/null | grep -v "sing-box" | crontab -
-            echo -e "${INFO} 已清理 crontab 任务"
-        fi
-        fi
-        
         ok "旧版本已卸载"
     fi
 }
