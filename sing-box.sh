@@ -338,6 +338,10 @@ create_service() {
     echo ""
     info "配置 Go 内存优化参数（降低 Alpine/LXC 小内存环境在高速率下崩溃或断流的概率）"
     read -p "$(echo -e "${CYAN}GOMEMLIMIT 数值 (默认 128，单位 MiB):${NC} ")" input_gomemlimit
+    mem_mib="${input_gomemlimit:-128}"
+    gomemlimit_str="${mem_mib}MiB"
+    mem_kb=$((mem_mib * 1024))                 # 用于 OpenRC ulimit -v（单位 KB）
+    mem_bytes=$((mem_mib * 1024 * 1024))       # 用于 systemd LimitAS（单位 字节）
     GOMEMLIMIT="${input_gomemlimit:-128}MiB"
     read -p "$(echo -e "${CYAN}GOGC 数值 (默认 75):${NC} ")" input_gogc
     GOGC="${input_gogc:-75}"
@@ -355,6 +359,7 @@ Type=simple
 User=root
 Environment="GOMEMLIMIT=$GOMEMLIMIT"
 Environment="GOGC=$GOGC"
+LimitAS=$mem_bytes
 ExecStart=$CORE_BIN run -c $CONFIG_JSON
 Restart=on-failure
 RestartSec=5s
@@ -378,6 +383,7 @@ pidfile="/run/${RC_SVCNAME}.pid"
 command_background=true
 export GOMEMLIMIT="$GOMEMLIMIT"
 export GOGC="$GOGC"
+ulimit -v $mem_kb
 depend() {
     need net
 }
