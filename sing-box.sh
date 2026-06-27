@@ -356,7 +356,7 @@ EOF
         systemctl start sing-box
         ok "systemd 服务已启动"
     else
-        cat > /etc/init.d/sing-box <<EOF
+        cat > /etc/init.d/sing-box <<'EOF'
 #!/sbin/openrc-run
 name="sing-box"
 description="sing-box proxy service"
@@ -404,7 +404,7 @@ urlencode() {
 get_public_ip() {
     echo ""
     echo "$(timeout 5 curl -s4 --connect-timeout 2 --max-time 4 -k https://ipinfo.io 2>/dev/null | grep -E '"country"|"city"' | sed -e 's/.*"country": "\(.*\)".*/国家: \1/' -e 's/.*"city": "\(.*\)".*/城市: \1/')"
-    
+
     echo ""
     info "正在获取公网 IP ..."
 
@@ -452,7 +452,7 @@ get_public_ip() {
 output_links() {
     echo ""
     echo -e "${GREEN}节点链接(如果使用vless + ws + cdn 请把端口改成443(security=tls)或80(security=none))：${NC}"
-    
+
     local ip_for_url="$PUBLIC_IP"
     if [[ "$PUBLIC_IP" =~ : ]]; then
         ip_for_url="[$PUBLIC_IP]"
