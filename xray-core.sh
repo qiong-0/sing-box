@@ -103,6 +103,7 @@ install_xray() {
 }
 
 generate_cert() {
+    mkdir -p "$REALITY_DIR"
     local cert_file="$CERT_DIR/cert.pem"
     local key_file="$CERT_DIR/key.pem"
     if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
@@ -123,7 +124,6 @@ generate_cert() {
 }
 
 generate_reality_keys() {
-    mkdir -p "$REALITY_DIR"
     local pub_file="$REALITY_DIR/public.key"
     local priv_file="$REALITY_DIR/private.key"
     if [ ! -f "$pub_file" ] || [ ! -f "$priv_file" ]; then
