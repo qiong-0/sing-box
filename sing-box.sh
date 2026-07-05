@@ -109,11 +109,11 @@ generate_cert() {
     local key_file="$CERT_DIR/key.pem"
     if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
         info "生成 TLS 证书..."
-        if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$key_file" -out "$cert_file" -days 3650 -nodes -subj "/CN=$DOMAIN" -addext "subjectAltName=DNS:$DOMAIN" 2>/dev/null; then
+        if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$key_file" -out "$cert_file" -days 3650 -nodes -subj "/CN=$COMMON_SNI" -addext "subjectAltName=DNS:$COMMON_SNI" 2>/dev/null; then
             ok "证书生成完成（含 SAN）"
         else
             warn "openssl 不支持 -addext，使用不含 SAN 的证书（客户端需跳过验证）"
-            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$key_file" -out "$cert_file" -days 3650 -nodes -subj "/CN=$DOMAIN"
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$key_file" -out "$cert_file" -days 3650 -nodes -subj "/CN=$COMMON_SNI"
         fi
         chmod 600 "$key_file" "$cert_file"
         ok "证书生成完成: $cert_file"
