@@ -64,8 +64,8 @@ detect_init() {
 
 get_arch() {
     case $(uname -m) in
-        x86_64|amd64) ARCH="amd64" ;;
-        aarch64|arm64) ARCH="arm64" ;;
+        x86_64|amd64) ARCH="64" ;;
+        aarch64|arm64) ARCH="arm64-v8a" ;;
         *) error "不支持的系统架构: $(uname -m)" ;;
     esac
     ok "系统架构: $ARCH"
