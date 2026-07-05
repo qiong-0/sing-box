@@ -6,4 +6,4 @@ ws协议不需要tls证书 可套cdn cloudflare设置 加密模式：灵活 或 
 
 一键三协议sing-box(ws + reality + hy2)：bash <(curl -sL https://raw.githubusercontent.com/qiong-0/sing-box/main/sing-box.sh)
 
-一键二协议xray-core(ws + reality)：bash <(curl -sL https://raw.githubusercontent.com/qiong-0/sing-box/main/xray-core.sh)
+一键三协议xray-core(ws + reality + hy2)：bash <(curl -sL https://raw.githubusercontent.com/qiong-0/sing-box/main/xray-core.sh)
