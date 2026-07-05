@@ -226,7 +226,7 @@ write_config() {
       "type": "vless",
       "tag": "VLESS-WS-in",
       "listen": "::",
-      "listen_port": $WS_PORT,
+      "port": $WS_PORT,
       "users": [
         { "uuid": "$UUID", "flow": "" }
       ],
@@ -242,7 +242,7 @@ write_config() {
       "type": "hysteria2",
       "tag": "HY2-in",
       "listen": "::",
-      "listen_port": $HY2_PORT,
+      "port": $HY2_PORT,
       "users": [
         { "password": "$UUID" }
       ],
@@ -252,7 +252,7 @@ write_config() {
       "type": "vless",
       "tag": "VLESS-Reality-in",
       "listen": "::",
-      "listen_port": $REALITY_PORT,
+      "port": $REALITY_PORT,
       "users": [
         { "uuid": "$UUID", "flow": "xtls-rprx-vision" }
       ],
