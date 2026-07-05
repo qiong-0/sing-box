@@ -233,9 +233,9 @@ EOF
 
 create_service() {
     if [[ $INIT == "systemd" ]]; then
-        cat > /lib/systemd/system/sing-box.service <<EOF
+        cat > /lib/systemd/system/xray.service <<EOF
 [Unit]
-Description=sing-box Service
+Description=xray Service
 After=network.target
 
 [Service]
@@ -249,14 +249,14 @@ RestartSec=5s
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        systemctl enable sing-box
-        systemctl start sing-box
+        systemctl enable xray
+        systemctl start xray
         ok "systemd 服务已启动"
     else
-        cat > /etc/init.d/sing-box <<'EOF'
+        cat > /etc/init.d/xray <<'EOF'
 #!/sbin/openrc-run
-name="sing-box"
-description="sing-box proxy service"
+name="xray"
+description="xray proxy service"
 command="CORE_BIN_PLACEHOLDER"
 command_args="run -c CONFIG_JSON_PLACEHOLDER"
 command_user="root"
@@ -266,18 +266,18 @@ depend() {
     need net
 }
 EOF
-        sed -i "s|CORE_BIN_PLACEHOLDER|$CORE_BIN|g" /etc/init.d/sing-box
-        sed -i "s|CONFIG_JSON_PLACEHOLDER|$CONFIG_JSON|g" /etc/init.d/sing-box
-        chmod +x /etc/init.d/sing-box
-        rc-update add sing-box default
-        rc-service sing-box start
+        sed -i "s|CORE_BIN_PLACEHOLDER|$CORE_BIN|g" /etc/init.d/xray
+        sed -i "s|CONFIG_JSON_PLACEHOLDER|$CONFIG_JSON|g" /etc/init.d/xray
+        chmod +x /etc/init.d/xray
+        rc-update add xray default
+        rc-service xray start
         ok "OpenRC 服务已启动"
     fi
 
     sleep 2
-    if [[ $INIT == "systemd" ]] && systemctl is-active --quiet sing-box; then
+    if [[ $INIT == "systemd" ]] && systemctl is-active --quiet xray; then
         ok "服务运行正常"
-    elif [[ $INIT == "openrc" ]] && rc-service sing-box status | grep -q "started"; then
+    elif [[ $INIT == "openrc" ]] && rc-service xray status | grep -q "started"; then
         ok "服务运行正常"
     else
         warn "服务可能未正常启动，请手动运行 '$CORE_BIN run -c $CONFIG_JSON' 检查错误"
