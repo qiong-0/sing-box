@@ -88,7 +88,7 @@ uninstall_old() {
     fi
 }
 
-install_singbox() {
+install_xray() {
     print_info "下载 Xray-core ..."
     mkdir -p "$CORE_DIR/bin"
     latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
@@ -102,27 +102,8 @@ install_singbox() {
     print_info "Xray-core 安装完成: $($CORE_BIN version | head -n1)"
 }
 
-generate_cert() {
-    local cert_file="$CERT_DIR/cert.pem"
-    local key_file="$CERT_DIR/key.pem"
-    if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
-        info "生成 TLS 证书..."
-        if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$key_file" -out "$cert_file" -days 3650 -nodes -subj "/CN=$DOMAIN" -addext "subjectAltName=DNS:$DOMAIN" 2>/dev/null; then
-            ok "证书生成完成（含 SAN）"
-        else
-            warn "openssl 不支持 -addext，使用不含 SAN 的证书（客户端需跳过验证）"
-            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$key_file" -out "$cert_file" -days 3650 -nodes -subj "/CN=$DOMAIN"
-        fi
-        chmod 600 "$key_file" "$cert_file"
-        ok "证书生成完成: $cert_file"
-    else
-        ok "证书已存在，跳过生成"
-    fi
-    CERT_FILE="$cert_file"
-    KEY_FILE="$key_file"
-}
-
 generate_reality_keys() {
+    mkdir -p "$REALITY_DIR"
     local pub_file="$REALITY_DIR/public.key"
     local priv_file="$REALITY_DIR/private.key"
     if [ ! -f "$pub_file" ] || [ ! -f "$priv_file" ]; then
@@ -130,9 +111,9 @@ generate_reality_keys() {
         output=$($CORE_BIN x25519)
         priv=$(echo "$output" | sed -n '1p')
         pub=$(echo "$output" | sed -n '2p')
-        echo "$priv" "$pub"
         echo "$priv" > "$priv_file"
-        chmod 600 "$pub_file" "$priv_file"
+        echo "$pub" > "$pub_file"
+        chmod 600 "$priv_file" "$pub_file"
         ok "Reality 密钥对生成完成"
     else
         ok "Reality 密钥对已存在，跳过生成"
@@ -381,9 +362,8 @@ main() {
     get_arch
     detect_init
     uninstall_old
-    install_singbox
+    install_xray
     get_config_all
-    generate_cert
     generate_reality_keys
     write_config
     create_service
