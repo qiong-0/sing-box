@@ -192,8 +192,10 @@ get_config_all() {
 
 write_config() {
     local hy2_tls="{
-        \"cert\": \"$CERT_FILE\",
-        \"key\": \"$KEY_FILE\"
+        \"enabled\": true,
+        \"certificate_path\": \"$CERT_FILE\",
+        \"key_path\": \"$KEY_FILE\",
+        \"server_name\": \"$COMMON_SNI\"
     }"
 
     local reality_tls="{
