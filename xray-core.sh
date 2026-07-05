@@ -73,15 +73,15 @@ get_arch() {
 
 uninstall_old() {
     if [ -d "$CORE_DIR" ]; then
-        warn "检测到已安装的 sing-box，执行卸载..."
+        warn "检测到已安装的 xray，执行卸载..."
         if [ "$INIT" = "systemd" ]; then
-            systemctl stop sing-box 2>/dev/null || true
-            systemctl disable sing-box 2>/dev/null || true
-            rm -f /lib/systemd/system/sing-box.service
+            systemctl stop xray 2>/dev/null || true
+            systemctl disable xray 2>/dev/null || true
+            rm -f /lib/systemd/system/xray.service
         elif [ "$INIT" = "openrc" ]; then
-            rc-service sing-box stop 2>/dev/null || true
-            rc-update del sing-box 2>/dev/null || true
-            rm -f /etc/init.d/sing-box
+            rc-service xray stop 2>/dev/null || true
+            rc-update del xray 2>/dev/null || true
+            rm -f /etc/init.d/xray
         fi
         rm -rf "$CORE_DIR" "$LOG_DIR"
         ok "旧版本已卸载"
@@ -170,7 +170,7 @@ get_config_all() {
 }
 
 write_config() {
-cat > "$CONFIG_JSON" <<EOF
+    cat > "$CONFIG_JSON" <<EOF
 {
   "log": {
     "loglevel": "warning"
