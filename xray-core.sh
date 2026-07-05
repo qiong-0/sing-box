@@ -100,6 +100,7 @@ install_xray() {
     chmod +x "$CORE_BIN"
     rm -rf "$tmp_zip" /tmp/xray_extract
     ok "Xray-core 安装完成: $($CORE_BIN version | head -n1)"
+    mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR" "$CERT_DIR" "$REALITY_DIR"
 }
 
 generate_cert() {
