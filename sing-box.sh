@@ -105,6 +105,7 @@ install_singbox() {
 }
 
 generate_cert() {
+    mkdir -p "$CERT_DIR"
     local cert_file="$CERT_DIR/cert.pem"
     local key_file="$CERT_DIR/key.pem"
     if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
