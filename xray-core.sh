@@ -191,76 +191,75 @@ get_config_all() {
 }
 
 write_config() {
-    local hy2_tls="{
-        \"enabled\": true,
-        \"certificate_path\": \"$CERT_FILE\",
-        \"key_path\": \"$KEY_FILE\",
-        \"server_name\": \"$COMMON_SNI\"
-    }"
-
-    local reality_tls="{
-        \"enabled\": true,
-        \"server_name\": \"$COMMON_SNI\",
-        \"reality\": {
-            \"enabled\": true,
-            \"handshake\": {
-                \"server\": \"$COMMON_SNI\",
-                \"server_port\": 443
-            },
-            \"private_key\": \"$REALITY_PRIV\",
-            \"short_id\": [
-                \"$REALITY_SID\"
-            ]
-        }
-    }"
-
     cat > "$CONFIG_JSON" <<EOF
 {
   "log": {
     "level": "error",
-    "output": "/dev/null",
-    "timestamp": false
+    "access": "/dev/null",
+    "error": "/dev/null"
   },
   "inbounds": [
     {
-      "type": "vless",
+      "protocol": "vless",
       "tag": "VLESS-WS-in",
       "listen": "::",
       "port": $WS_PORT,
-      "users": [
-        { "uuid": "$UUID", "flow": "" }
-      ],
-      "transport": {
-        "type": "ws",
-        "path": "/",
-        "headers": {
-          "Host": "$WS_DOMAIN"
+      "settings": {
+        "clients": [
+          { "id": "$UUID", "flow": "" }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "/",
+          "headers": { "Host": "$WS_DOMAIN" }
         }
       }
     },
     {
-      "type": "hysteria2",
+      "protocol": "hysteria2",
       "tag": "HY2-in",
       "listen": "::",
       "port": $HY2_PORT,
-      "users": [
-        { "password": "$UUID" }
-      ],
-      "tls": $hy2_tls
+      "settings": {
+        "clients": [
+          { "password": "$UUID" }
+        ],
+        "tls": {
+          "certificate_path": "$CERT_FILE",
+          "key_path": "$KEY_FILE",
+          "server_name": "$COMMON_SNI"
+        }
+      }
     },
     {
-      "type": "vless",
+      "protocol": "vless",
       "tag": "VLESS-Reality-in",
       "listen": "::",
       "port": $REALITY_PORT,
-      "users": [
-        { "uuid": "$UUID", "flow": "xtls-rprx-vision" }
-      ],
-      "tls": $reality_tls
+      "settings": {
+        "clients": [
+          { "id": "$UUID", "flow": "xtls-rprx-vision" }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "$COMMON_SNI",
+          "privateKey": "$REALITY_PRIV",
+          "shortId": "$REALITY_SID",
+          "dest": "$COMMON_SNI:443",
+          "xver": 0
+        }
+      }
     }
   ],
   "outbounds": [
-    { "type": "direct", "tag": "direct" }
+    { "protocol": "direct", "tag": "direct" }
   ]
 }
 EOF
