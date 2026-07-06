@@ -364,7 +364,6 @@ main() {
     get_config_all
     generate_reality_keys
     write_config
-    setup_iptables
     create_service
     get_public_ip
     output_links
