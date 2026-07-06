@@ -108,20 +108,28 @@ install_xray() {
 generate_reality_keys() {
     local pub_file="$REALITY_DIR/public.key"
     local priv_file="$REALITY_DIR/private.key"
-    if [ ! -f "$pub_file" ] || [ ! -f "$priv_file" ]; then
-        info "生成 Reality 密钥对..."
-        output=$($CORE_BIN x25519)
-        priv=$(echo "$output" | grep 'PrivateKey' | awk '{print $2}' | tr -d '\r\n')
-        pub=$(echo "$output" | grep 'PublicKey' | awk '{print $2}' | tr -d '\r\n')
-        echo "$priv" > "$priv_file"
-        echo "$pub" > "$pub_file"
-        chmod 600 "$priv_file" "$pub_file"
-        ok "Reality 密钥对生成完成"
-    else
-        ok "Reality 密钥对已存在，跳过生成"
+    
+    rm -f "$pub_file" "$priv_file"
+    
+    info "生成 Reality 密钥对..."
+    output=$($CORE_BIN x25519)
+    
+    priv=$(echo "$output" | awk '/PrivateKey/ {print $2}' | tr -d '\r\n')
+    pub=$(echo "$output" | awk '/PublicKey/ {print $2}' | tr -d '\r\n')
+    
+    if [ -z "$priv" ] || [ -z "$pub" ]; then
+        priv=$(echo "$output" | sed -n 's/.*PrivateKey: //p' | tr -d '\r\n')
+        pub=$(echo "$output" | sed -n 's/.*PublicKey: //p' | tr -d '\r\n')
     fi
+    
+    echo "$priv" > "$priv_file"
+    echo "$pub" > "$pub_file"
+    chmod 600 "$priv_file" "$pub_file"
+    
     REALITY_PUB=$(cat "$pub_file" | tr -d '\r\n')
     REALITY_PRIV=$(cat "$priv_file" | tr -d '\r\n')
+    
+    ok "Reality 密钥对生成完成"
 }
 
 get_config_all() {
