@@ -193,6 +193,7 @@ write_config() {
         "network": "tcp",
         "security": "reality",
         "realitySettings": {
+          "serverNames": ["$COMMON_SNI"],
           "serverName": "$COMMON_SNI",
           "privateKey": "$REALITY_PRIV",
           "shortId": "$REALITY_SID",
