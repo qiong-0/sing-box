@@ -112,14 +112,30 @@ generate_reality_keys() {
     rm -f "$pub_file" "$priv_file"
     
     info "生成 Reality 密钥对..."
-    output=$($CORE_BIN x25519)
+    if [ ! -x "$CORE_BIN" ]; then
+        error "Xray 二进制文件不存在或不可执行: $CORE_BIN"
+    fi
     
-    priv=$(echo "$output" | awk '/PrivateKey/ {print $2}' | tr -d '\r\n')
-    pub=$(echo "$output" | awk '/PublicKey/ {print $2}' | tr -d '\r\n')
+    output=$($CORE_BIN x25519 2>/dev/null)
+    if [ -z "$output" ]; then
+        error "执行 $CORE_BIN x25519 失败，请检查 Xray 是否完整安装"
+    fi
+    
+    priv=$(echo "$output" | grep -E 'PrivateKey:' | sed -E 's/.*PrivateKey:\s*//' | tr -d '\r\n')
+    if [ -z "$priv" ]; then
+        priv=$(echo "$output" | grep -E 'Private key:' | sed -E 's/.*Private key:\s*//' | tr -d '\r\n')
+    fi
+    
+    pub=$(echo "$output" | grep -E 'PublicKey:' | sed -E 's/.*PublicKey:\s*//' | tr -d '\r\n')
+    if [ -z "$pub" ]; then
+        pub=$(echo "$output" | grep -E 'Password \(PublicKey\):' | sed -E 's/.*Password \(PublicKey\):\s*//' | tr -d '\r\n')
+    fi
+    if [ -z "$pub" ]; then
+        pub=$(echo "$output" | grep -E 'Public key:' | sed -E 's/.*Public key:\s*//' | tr -d '\r\n')
+    fi
     
     if [ -z "$priv" ] || [ -z "$pub" ]; then
-        priv=$(echo "$output" | sed -n 's/.*PrivateKey: //p' | tr -d '\r\n')
-        pub=$(echo "$output" | sed -n 's/.*PublicKey: //p' | tr -d '\r\n')
+        error "无法从 xray x25519 输出中提取密钥，输出内容：\n$output"
     fi
     
     echo "$priv" > "$priv_file"
