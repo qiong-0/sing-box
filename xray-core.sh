@@ -89,18 +89,20 @@ uninstall_old() {
 }
 
 install_xray() {
+    mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR" "$CERT_DIR" "$REALITY_DIR"
     ok "下载 Xray-core ..."
-    mkdir -p "$CORE_DIR/bin"
     latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
     download_url="https://github.com/XTLS/Xray-core/releases/download/${latest_version}/Xray-linux-${ARCH}.zip"
     tmp_zip="/tmp/xray.zip"
     wget -O "$tmp_zip" "$download_url" || curl -L -o "$tmp_zip" "$download_url"
+    if [ ! -f "$tmp_zip" ] || [ ! -s "$tmp_zip" ]; then
+        error "下载 Xray 失败，请检查网络连接"
+    fi
     unzip -o "$tmp_zip" -d /tmp/xray_extract/
     cp /tmp/xray_extract/xray "$CORE_BIN"
     chmod +x "$CORE_BIN"
     rm -rf "$tmp_zip" /tmp/xray_extract
     ok "Xray-core 安装完成: $($CORE_BIN version | head -n1)"
-    mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR" "$CERT_DIR" "$REALITY_DIR"
 }
 
 generate_reality_keys() {
@@ -109,8 +111,8 @@ generate_reality_keys() {
     if [ ! -f "$pub_file" ] || [ ! -f "$priv_file" ]; then
         info "生成 Reality 密钥对..."
         output=$($CORE_BIN x25519)
-        priv=$(echo "$output" | sed -n '1p')
-        pub=$(echo "$output" | sed -n '2p')
+        priv=$(echo "$output" | sed -n '1p' | tr -d '\r\n')
+        pub=$(echo "$output" | sed -n '2p' | tr -d '\r\n')
         echo "$priv" > "$priv_file"
         echo "$pub" > "$pub_file"
         chmod 600 "$priv_file" "$pub_file"
@@ -118,8 +120,8 @@ generate_reality_keys() {
     else
         ok "Reality 密钥对已存在，跳过生成"
     fi
-    REALITY_PUB=$(cat "$pub_file")
-    REALITY_PRIV=$(cat "$priv_file")
+    REALITY_PUB=$(cat "$pub_file" | tr -d '\n\r ')
+    REALITY_PRIV=$(cat "$priv_file" | tr -d '\n\r ')
 }
 
 get_config_all() {
@@ -174,7 +176,7 @@ write_config() {
         "network": "ws",
         "wsSettings": {
           "path": "/",
-          "headers": { "Host": "$WS_DOMAIN" }
+          "host": "$WS_DOMAIN"
         }
       }
     },
@@ -196,7 +198,7 @@ write_config() {
           "serverNames": ["$COMMON_SNI"],
           "serverName": "$COMMON_SNI",
           "privateKey": "$REALITY_PRIV",
-          "shortId": "$REALITY_SID",
+          "shortIds": ["$REALITY_SID"],
           "dest": "$COMMON_SNI:443",
           "xver": 0
         }
