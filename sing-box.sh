@@ -83,6 +83,20 @@ uninstall_old() {
             rc-update del sing-box 2>/dev/null || true
             rm -f /etc/init.d/sing-box
         fi
+        info "删除 iptables 配置文件..."
+        rm -rf /etc/iptables
+        info "卸载 iptables 软件包..."
+        if command -v apk &>/dev/null; then
+            apk del iptables ip6tables 2>/dev/null || true
+        elif command -v apt-get &>/dev/null; then
+            apt-get remove -y iptables 2>/dev/null || true
+        elif command -v dnf &>/dev/null; then
+            dnf remove -y iptables iptables-services 2>/dev/null || true
+        elif command -v yum &>/dev/null; then
+            yum remove -y iptables iptables-services 2>/dev/null || true
+        elif command -v zypper &>/dev/null; then
+            zypper remove -y iptables 2>/dev/null || true
+        fi
         rm -rf "$CORE_DIR" "$LOG_DIR"
         ok "旧版本已卸载"
     fi
