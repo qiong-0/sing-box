@@ -148,6 +148,31 @@ generate_reality_keys() {
     ok "Reality 密钥对生成完成"
 }
 
+generate_cert() {
+    local cert_file="$CERT_DIR/cert.pem"
+    local key_file="$CERT_DIR/key.pem"
+    if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
+        info "生成 TLS 证书..."
+        if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+            -keyout "$key_file" -out "$cert_file" -days 3650 -nodes \
+            -subj "/CN=$COMMON_SNI" \
+            -addext "subjectAltName=DNS:$COMMON_SNI" 2>/dev/null; then
+            ok "证书生成完成（含 SAN）"
+        else
+            warn "openssl 不支持 -addext，使用不含 SAN 的证书（客户端需跳过验证）"
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+                -keyout "$key_file" -out "$cert_file" -days 3650 -nodes \
+                -subj "/CN=$COMMON_SNI"
+        fi
+        chmod 600 "$key_file" "$cert_file"
+        ok "证书生成完成: $cert_file"
+    else
+        ok "证书已存在，跳过生成"
+    fi
+    CERT_FILE="$cert_file"
+    KEY_FILE="$key_file"
+}
+
 get_config_all() {
     UUID=$(cat /proc/sys/kernel/random/uuid)
     echo ""
@@ -166,6 +191,25 @@ get_config_all() {
     read -p "$(echo -e "${CYAN}SNI (默认 apple.com):${NC} ")" COMMON_SNI
     [[ -z $COMMON_SNI ]] && COMMON_SNI="apple.com"
     echo "SNI: $COMMON_SNI"
+
+    echo ""
+    info "配置 Hysteria2"
+    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" HY2_PORT
+    [[ -z $HY2_PORT ]] && HY2_PORT=$((RANDOM % 40001 + 10000))
+    echo "端口: $HY2_PORT"
+    read -p "$(echo -e "${CYAN}是否开启端口跳跃？(默认n) [y/n]:${NC} ")" HY2_HOP
+    HY2_HOP=${HY2_HOP:-n}
+    if [[ "${HY2_HOP,,}" == "y" ]]; then
+        read -p "$(echo -e "${CYAN}端口跳跃范围 (起始-结束，默认 10000-50000):${NC} ")" HY2_PORTS
+        [[ -z $HY2_PORTS ]] && HY2_PORTS="10000-50000"
+        if [[ ! "$HY2_PORTS" =~ ^[0-9]+-[0-9]+$ ]]; then
+            warn "端口范围格式错误，使用默认 10000-50000"
+            HY2_PORTS="10000-50000"
+        fi
+        echo "端口跳跃: $HY2_PORTS"
+    else
+        HY2_PORTS=""
+    fi
 
     echo ""
     info "配置 VLESS + Reality"
@@ -201,6 +245,35 @@ write_config() {
         "wsSettings": {
           "path": "/",
           "host": "$WS_DOMAIN"
+        }
+      }
+    },
+        {
+      "protocol": "hysteria",
+      "tag": "HY2-in",
+      "listen": "::",
+      "port": $HY2_PORT,
+      "settings": {
+        "version": 2,
+        "users": [
+          { "auth": "$UUID", "level": 0 }
+        ]
+      },
+      "streamSettings": {
+        "network": "hysteria",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "$CERT_FILE",
+              "keyFile": "$KEY_FILE"
+            }
+          ],
+          "alpn": ["h3"]
+        },
+        "hysteriaSettings": {
+          "version": 2,
+          "auth": "$UUID"
         }
       }
     },
@@ -290,6 +363,66 @@ EOF
     fi
 }
 
+setup_hy2_iptables() {
+    [[ "${HY2_HOP,,}" != "y" || -z "$HY2_PORTS" ]] && return 0
+
+    local start_port=$(echo "$HY2_PORTS" | cut -d'-' -f1)
+    local end_port=$(echo "$HY2_PORTS" | cut -d'-' -f2)
+
+    if ! command -v iptables &>/dev/null; then
+        warn "未安装 iptables，正在尝试安装..."
+        case $PKG_MANAGER in
+            apk)  $INSTALL_CMD iptables ip6tables ;;
+            apt)  $UPDATE_CMD && $INSTALL_CMD iptables ip6tables ;;
+            yum|dnf) $UPDATE_CMD && $INSTALL_CMD iptables iptables-services ;;
+            zypper) $UPDATE_CMD && $INSTALL_CMD iptables ;;
+        esac
+        command -v iptables &>/dev/null || error "iptables 安装失败，请手动安装"
+    fi
+
+    iptables -t nat -D PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT 2>/dev/null || true
+    if command -v ip6tables &>/dev/null; then
+        ip6tables -t nat -D PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT 2>/dev/null || true
+    fi
+
+    iptables -t nat -A PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT
+    if command -v ip6tables &>/dev/null; then
+        ip6tables -t nat -A PREROUTING -p udp --dport $start_port:$end_port -j REDIRECT --to-ports $HY2_PORT
+        ok "已添加 IPv4 + IPv6 端口跳跃规则 ($start_port-$end_port -> $HY2_PORT)"
+    else
+        ok "已添加 IPv4 端口跳跃规则 ($start_port-$end_port -> $HY2_PORT)"
+    fi
+
+    iptables -I INPUT -p udp --dport $start_port:$end_port -j ACCEPT
+    if command -v ip6tables &>/dev/null; then
+        ip6tables -I INPUT -p udp --dport $start_port:$end_port -j ACCEPT
+    fi
+
+    info "正在持久化 iptables 规则..."
+    if [[ "$INIT" == "systemd" ]]; then
+        if command -v netfilter-persistent &>/dev/null; then
+            netfilter-persistent save
+            ok "已通过 netfilter-persistent 保存"
+        elif command -v iptables-save &>/dev/null; then
+            mkdir -p /etc/iptables
+            iptables-save > /etc/iptables/rules.v4
+            [ -f /etc/iptables/rules.v6 ] || ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
+            systemctl enable iptables-restore 2>/dev/null || true
+            systemctl enable ip6tables-restore 2>/dev/null || true
+            ok "已保存规则到 /etc/iptables/rules.v4 和 rules.v6"
+        fi
+    elif [[ "$INIT" == "openrc" ]]; then
+        mkdir -p /etc/iptables
+        iptables-save > /etc/iptables/rules-save
+        if command -v ip6tables &>/dev/null; then
+            ip6tables-save > /etc/iptables/rules-save-ip6
+        fi
+        [ -f /etc/init.d/iptables ] && rc-update add iptables default 2>/dev/null || true
+        [ -f /etc/init.d/ip6tables ] && rc-update add ip6tables default 2>/dev/null || true
+        ok "已保存规则到 /etc/iptables/ 并尝试添加启动服务"
+    fi
+}
+
 urlencode() {
     local string="$1"
     local encoded=""
@@ -364,6 +497,14 @@ output_links() {
     echo -e "vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo ""
 
+    local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI&insecure=1"
+    if [[ "${HY2_HOP,,}" == "y" && -n "$HY2_PORTS" ]]; then
+        hy2_link="${hy2_link}&mport=$HY2_PORTS&ports=$HY2_PORTS"
+    fi
+    hy2_link="${hy2_link}#hy2"
+    echo -e "$hy2_link"
+    echo ""
+
     echo -e "vless://$UUID@$ip_for_url:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#vless-reality"
     echo ""
 
@@ -390,7 +531,9 @@ main() {
     install_xray
     get_config_all
     generate_reality_keys
+    generate_cert
     write_config
+    setup_hy2_iptables
     create_service
     get_public_ip
     output_links
