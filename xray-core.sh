@@ -105,7 +105,7 @@ uninstall_old() {
 install_xray() {
     mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR" "$CERT_DIR" "$REALITY_DIR"
     ok "下载 Xray-core ..."
-    latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
+    latest_version=$(curl -sI https://github.com/XTLS/Xray-core/releases/latest | grep -i '^location:' | sed -E 's|.*/tag/([^[:space:]]+).*|\1|' | tr -d '\r\n')
     download_url="https://github.com/XTLS/Xray-core/releases/download/${latest_version}/Xray-linux-${ARCH}.zip"
     tmp_zip="/tmp/xray.zip"
     wget -O "$tmp_zip" "$download_url" || curl -L -o "$tmp_zip" "$download_url"
