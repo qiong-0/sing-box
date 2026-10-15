@@ -104,7 +104,7 @@ uninstall_old() {
 
 install_xray() {
     local latest_url
-    latest_url=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
+    latest_url=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
     [[ -z $latest_url ]] && error "无法获取 Xray 最新版本，请检查网络或 GitHub API 访问"
     local version=${latest_url#v}
     local download_url="https://github.com/XTLS/Xray-core/releases/download/${latest_url}/Xray-linux-${ARCH}.zip"
