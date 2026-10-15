@@ -238,9 +238,9 @@ write_config() {
     cat > "$CONFIG_JSON" <<EOF
 {
   "log": {
-    "level": "error",
-    "access": "/dev/null",
-    "error": "/dev/null"
+  "loglevel": "debug",
+  "access": "/var/log/xray/access.log",
+  "error": "/var/log/xray/error.log"
   },
   "inbounds": [
     {
