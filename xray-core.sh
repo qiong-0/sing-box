@@ -175,9 +175,7 @@ get_config_all() {
     echo "端口: $WS_PORT"
 
     echo ""
-    info "配置 SNI（用于 TLS 伪装）"
-    read -p "$(echo -e "${CYAN}SNI (默认 apple.com):${NC} ")" COMMON_SNI
-    [[ -z $COMMON_SNI ]] && COMMON_SNI="apple.com"
+    COMMON_SNI="apple.com"
     echo "SNI: $COMMON_SNI"
 
     echo ""
