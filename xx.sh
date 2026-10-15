@@ -182,19 +182,13 @@ get_config_all() {
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" HY2_PORT
     [[ -z $HY2_PORT ]] && HY2_PORT=$((RANDOM % 40001 + 10000))
     echo "端口: $HY2_PORT"
-    read -p "$(echo -e "${CYAN}是否开启端口跳跃？(默认n) [y/n]:${NC} ")" HY2_HOP
-    HY2_HOP=${HY2_HOP:-n}
-    if [[ "${HY2_HOP,,}" == "y" ]]; then
-        read -p "$(echo -e "${CYAN}端口跳跃范围 (起始-结束，默认 10000-50000):${NC} ")" HY2_PORTS
-        [[ -z $HY2_PORTS ]] && HY2_PORTS="10000-50000"
-        if [[ ! "$HY2_PORTS" =~ ^[0-9]+-[0-9]+$ ]]; then
-            warn "端口范围格式错误，使用默认 10000-50000"
-            HY2_PORTS="10000-50000"
-        fi
-        echo "端口跳跃: $HY2_PORTS"
-    else
-        HY2_PORTS=""
+    read -p "$(echo -e "${CYAN}端口跳跃范围 (起始-结束，默认 10000-50000):${NC} ")" HY2_PORTS
+    [[ -z $HY2_PORTS ]] && HY2_PORTS="10000-50000"
+    if [[ ! "$HY2_PORTS" =~ ^[0-9]+-[0-9]+$ ]]; then
+        warn "端口范围格式错误，使用默认 10000-50000"
+        HY2_PORTS="10000-50000"
     fi
+    echo "端口跳跃: $HY2_PORTS"
 
     echo ""
     info "配置 AnyTLS"
@@ -322,8 +316,6 @@ EOF
 }
 
 setup_iptables() {
-    [[ "${HY2_HOP,,}" != "y" || -z "$HY2_PORTS" ]] && return 0
-
     local start_port=$(echo "$HY2_PORTS" | cut -d'-' -f1)
     local end_port=$(echo "$HY2_PORTS" | cut -d'-' -f2)
 
@@ -523,13 +515,9 @@ output_links() {
     echo -e "anytls://$UUID@$ip_for_url:$ANYTLS_PORT?security=tls&sni=$COMMON_SNI&type=tcp#anytls"
     echo ""
 
-    local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI"
-    if [[ "${HY2_HOP,,}" == "y" && -n "$HY2_PORTS" ]]; then
-        hy2_link="${hy2_link}&mport=$HY2_PORTS&ports=$HY2_PORTS"
-    fi
-    hy2_link="${hy2_link}#hy2"
-    echo -e "$hy2_link"
+    echo -e "hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI&mport=$HY2_PORTS&ports=$HY2_PORTS#hy2"
     echo ""
+    
     echo -e "${YELLOW}复制链接到客户端即可使用${NC}"
     echo ""
 }
