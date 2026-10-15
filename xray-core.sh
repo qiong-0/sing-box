@@ -514,7 +514,7 @@ output_links() {
     echo -e "vless://$UUID@$ip_for_url:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#vless-reality"
     echo ""
 
-    local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI&insecure=1"
+    local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI"
     if [[ "${HY2_HOP,,}" == "y" && -n "$HY2_PORTS" ]]; then
         hy2_link="${hy2_link}&mport=$HY2_PORTS&ports=$HY2_PORTS"
     fi
