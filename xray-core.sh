@@ -72,17 +72,28 @@ get_arch() {
 }
 
 uninstall_old() {
-    if [ -d "$CORE_DIR" ]; then
-        warn "检测到已安装的 sing-box，执行卸载..."
-        if [ "$INIT" = "systemd" ]; then
-            systemctl stop sing-box 2>/dev/null || true
-            systemctl disable sing-box 2>/dev/null || true
-            rm -f /lib/systemd/system/sing-box.service
-        elif [ "$INIT" = "openrc" ]; then
-            rc-service sing-box stop 2>/dev/null || true
-            rc-update del sing-box 2>/dev/null || true
-            rm -f /etc/init.d/sing-box
+    local names=("sing-box" "mihomo")
+    local dirs=("/etc/sing-box" "/etc/mihomo")
+    local i
+    for i in 0 1; do
+        local svc="${names[$i]}"
+        local dir="${dirs[$i]}"
+        if [ -d "$dir" ]; then
+            warn "检测到已安装的 $svc，执行卸载..."
+            if [ "$INIT" = "systemd" ]; then
+                systemctl stop "$svc" 2>/dev/null || true
+                systemctl disable "$svc" 2>/dev/null || true
+                rm -f "/lib/systemd/system/${svc}.service"
+            elif [ "$INIT" = "openrc" ]; then
+                rc-service "$svc" stop 2>/dev/null || true
+                rc-update del "$svc" 2>/dev/null || true
+                rm -f "/etc/init.d/${svc}"
+            fi
+            rm -rf "$dir" "/var/log/$svc"
         fi
+    done
+
+    if [ -d "/etc/iptables" ]; then
         info "删除 iptables 配置文件..."
         rm -rf /etc/iptables
         info "卸载 iptables 软件包..."
@@ -97,25 +108,37 @@ uninstall_old() {
         elif command -v zypper &>/dev/null; then
             zypper remove -y iptables 2>/dev/null || true
         fi
-        rm -rf "$CORE_DIR" "$LOG_DIR"
-        ok "旧版本已卸载"
     fi
 }
 
-install_singbox() {
-    local latest_url
-    latest_url=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
-    [[ -z $latest_url ]] && error "无法获取 sing-box 最新版本，请检查网络或 GitHub API 访问"
-    local version=${latest_url#v}
-    local download_url="https://github.com/SagerNet/sing-box/releases/download/${latest_url}/sing-box-${version}-linux-${ARCH}.tar.gz"
-    info "下载 sing-box: $download_url"
-    wget --no-check-certificate -O /tmp/sing-box.tar.gz "$download_url" || error "下载失败"
-    tar -xzf /tmp/sing-box.tar.gz -C /tmp/ || error "解压失败"
+install_core() {
     mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR" "$CERT_DIR"
-    cp "/tmp/sing-box-${version}-linux-${ARCH}/sing-box" "$CORE_BIN"
-    chmod +x "$CORE_BIN"
-    rm -rf /tmp/sing-box.tar.gz "/tmp/sing-box-${version}-linux-${ARCH}"
-    ok "sing-box 安装完成: $($CORE_BIN version | head -n1)"
+
+    if [[ "$CLIENT_TYPE" == "0" ]]; then
+        local latest_url
+        latest_url=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
+        [[ -z $latest_url ]] && error "无法获取 sing-box 最新版本，请检查网络或 GitHub API 访问"
+        local version=${latest_url#v}
+        local download_url="https://github.com/SagerNet/sing-box/releases/download/${latest_url}/sing-box-${version}-linux-${ARCH}.tar.gz"
+        info "下载 sing-box: $download_url"
+        wget --no-check-certificate -O /tmp/sing-box.tar.gz "$download_url" || error "下载失败"
+        tar -xzf /tmp/sing-box.tar.gz -C /tmp/ || error "解压失败"
+        cp "/tmp/sing-box-${version}-linux-${ARCH}/sing-box" "$CORE_BIN"
+        chmod +x "$CORE_BIN"
+        rm -rf /tmp/sing-box.tar.gz "/tmp/sing-box-${version}-linux-${ARCH}"
+        ok "sing-box 安装完成: $($CORE_BIN version | head -n1)"
+    else
+        local latest_url
+        latest_url=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
+        [[ -z $latest_url ]] && error "无法获取 mihomo 最新版本，请检查网络或 GitHub API 访问"
+        local download_url="https://github.com/MetaCubeX/mihomo/releases/download/${latest_url}/mihomo-linux-${ARCH}-${latest_url}.gz"
+        info "下载 mihomo: $download_url"
+        wget --no-check-certificate -O /tmp/mihomo.gz "$download_url" || error "下载失败"
+        gunzip -c /tmp/mihomo.gz > "$CORE_BIN" || error "解压失败"
+        chmod +x "$CORE_BIN"
+        rm -f /tmp/mihomo.gz
+        ok "mihomo 安装完成: $($CORE_BIN -v | head -n1)"
+    fi
 }
 
 generate_cert() {
@@ -185,21 +208,22 @@ get_config_all() {
 }
 
 write_config() {
-    local hy2_tls="{
+    if [[ "$CONFIG_FORMAT" == "json" ]]; then
+        local hy2_tls="{
         \"enabled\": true,
         \"certificate_path\": \"$CERT_FILE\",
         \"key_path\": \"$KEY_FILE\",
         \"server_name\": \"$COMMON_SNI\"
     }"
 
-    local anytls_tls="{
+        local anytls_tls="{
         \"enabled\": true,
         \"certificate_path\": \"$CERT_FILE\",
         \"key_path\": \"$KEY_FILE\",
         \"server_name\": \"$COMMON_SNI\"
     }"
 
-    cat > "$CONFIG_JSON" <<EOF
+        cat > "$CONFIG_JSON" <<EOF
 {
   "log": {
     "level": "error",
@@ -249,7 +273,54 @@ write_config() {
   ]
 }
 EOF
-    ok "配置文件已生成: $CONFIG_JSON"
+        ok "sing-box 配置已生成: $CONFIG_JSON"
+    else
+        cat > "$CONFIG_JSON" <<EOF
+log-level: error
+ipv6: true
+allow-lan: true
+mode: rule
+external-controller: 127.0.0.1:9090
+
+listeners:
+  - name: vless-ws-in
+    type: vless
+    port: $WS_PORT
+    listen: "::"
+    users:
+      - username: user
+        uuid: $UUID
+        flow: ""
+    ws-path: "/"
+    ws-headers:
+      Host: $WS_DOMAIN
+
+  - name: hy2-in
+    type: hysteria2
+    port: $HY2_PORT
+    listen: "::"
+    users:
+      - password: $UUID
+    certificate: $CERT_FILE
+    private-key: $KEY_FILE
+    sni: $COMMON_SNI
+
+  - name: anytls-in
+    type: anytls
+    port: $ANYTLS_PORT
+    listen: "::"
+    users:
+      user: $UUID
+    certificate: $CERT_FILE
+    private-key: $KEY_FILE
+
+proxies: []
+proxy-groups: []
+rules:
+  - MATCH,DIRECT
+EOF
+        ok "mihomo 配置已生成: $CONFIG_JSON"
+    fi
 }
 
 setup_iptables() {
@@ -320,16 +391,23 @@ setup_iptables() {
 }
 
 create_service() {
+    local run_args
+    if [[ "$CLIENT_TYPE" == "0" ]]; then
+        run_args="run -c $CONFIG_JSON"
+    else
+        run_args="-d $CORE_DIR"
+    fi
+
     if [[ $INIT == "systemd" ]]; then
-        cat > /lib/systemd/system/sing-box.service <<EOF
+        cat > /lib/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
-Description=sing-box Service
+Description=${SERVICE_NAME} Service
 After=network.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=$CORE_BIN run -c $CONFIG_JSON
+ExecStart=$CORE_BIN $run_args
 Restart=on-failure
 RestartSec=5s
 
@@ -337,38 +415,36 @@ RestartSec=5s
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        systemctl enable sing-box
-        systemctl start sing-box
+        systemctl enable ${SERVICE_NAME}
+        systemctl start ${SERVICE_NAME}
         ok "systemd 服务已启动"
     else
-        cat > /etc/init.d/sing-box <<'EOF'
+        cat > /etc/init.d/${SERVICE_NAME} <<EOF
 #!/sbin/openrc-run
-name="sing-box"
-description="sing-box proxy service"
-command="CORE_BIN_PLACEHOLDER"
-command_args="run -c CONFIG_JSON_PLACEHOLDER"
+name="${SERVICE_NAME}"
+description="${SERVICE_NAME} proxy service"
+command="$CORE_BIN"
+command_args="$run_args"
 command_user="root"
-pidfile="/run/${RC_SVCNAME}.pid"
+pidfile="/run/\${RC_SVCNAME}.pid"
 command_background=true
 depend() {
     need net
 }
 EOF
-        sed -i "s|CORE_BIN_PLACEHOLDER|$CORE_BIN|g" /etc/init.d/sing-box
-        sed -i "s|CONFIG_JSON_PLACEHOLDER|$CONFIG_JSON|g" /etc/init.d/sing-box
-        chmod +x /etc/init.d/sing-box
-        rc-update add sing-box default
-        rc-service sing-box start
+        chmod +x /etc/init.d/${SERVICE_NAME}
+        rc-update add ${SERVICE_NAME} default
+        rc-service ${SERVICE_NAME} start
         ok "OpenRC 服务已启动"
     fi
 
     sleep 2
-    if [[ $INIT == "systemd" ]] && systemctl is-active --quiet sing-box; then
+    if [[ $INIT == "systemd" ]] && systemctl is-active --quiet ${SERVICE_NAME}; then
         ok "服务运行正常"
-    elif [[ $INIT == "openrc" ]] && rc-service sing-box status | grep -q "started"; then
+    elif [[ $INIT == "openrc" ]] && rc-service ${SERVICE_NAME} status | grep -q "started"; then
         ok "服务运行正常"
     else
-        warn "服务可能未正常启动，请手动运行 '$CORE_BIN run -c $CONFIG_JSON' 检查错误"
+        warn "服务可能未正常启动，请手动运行 '$CORE_BIN $run_args' 检查错误"
     fi
 }
 
@@ -463,19 +539,43 @@ output_links() {
 main() {
     [[ $EUID -ne 0 ]] && error "请以 root 用户执行（使用 sudo -i）"
 
-    CORE_DIR="/etc/sing-box"
-    CONF_DIR="$CORE_DIR/conf"
-    LOG_DIR="/var/log/sing-box"
-    CERT_DIR="$CORE_DIR/cert"
-    CORE_BIN="$CORE_DIR/bin/sing-box"
-    CONFIG_JSON="$CORE_DIR/config.json"
-
     detect_pkg_manager
     install_deps
     get_arch
     detect_init
+
+    echo ""
+    info "请选择要安装的内核"
+    echo "  0) sing-box"
+    echo "  1) mihomo"
+    read -p "$(echo -e "${CYAN}请输入选项 [0-1] (默认 0):${NC} ")" CLIENT_TYPE
+    CLIENT_TYPE=${CLIENT_TYPE:-0}
+    if [[ "$CLIENT_TYPE" != "0" && "$CLIENT_TYPE" != "1" ]]; then
+        warn "无效选项，使用默认 0 (sing-box)"
+        CLIENT_TYPE=0
+    fi
+    echo "已选择: $([ "$CLIENT_TYPE" = "0" ] && echo "sing-box" || echo "mihomo")"
+    echo ""
+
+    if [[ "$CLIENT_TYPE" == "0" ]]; then
+        CORE_DIR="/etc/sing-box"
+        CORE_BIN="$CORE_DIR/bin/sing-box"
+        CONFIG_JSON="$CORE_DIR/config.json"
+        SERVICE_NAME="sing-box"
+        CONFIG_FORMAT="json"
+    else
+        CORE_DIR="/etc/mihomo"
+        CORE_BIN="$CORE_DIR/bin/mihomo"
+        CONFIG_JSON="$CORE_DIR/config.yaml"
+        SERVICE_NAME="mihomo"
+        CONFIG_FORMAT="yaml"
+    fi
+    CONF_DIR="$CORE_DIR/conf"
+    LOG_DIR="/var/log/$SERVICE_NAME"
+    CERT_DIR="$CORE_DIR/cert"
+
     uninstall_old
-    install_singbox
+    install_core
     get_config_all
     generate_cert
     write_config
