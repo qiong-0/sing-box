@@ -165,6 +165,9 @@ get_config_all() {
     UUID=$(cat /proc/sys/kernel/random/uuid)
     echo ""
     echo "UUID: $UUID"
+    COMMON_SNI="apple.com"
+    echo ""
+    echo "SNI: $COMMON_SNI"
     echo ""
     info "配置 VLESS + WebSocket (无 TLS)"
     read -p "$(echo -e "${CYAN}域名:${NC} ")" WS_DOMAIN
@@ -173,10 +176,6 @@ get_config_all() {
     read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" WS_PORT
     [[ -z $WS_PORT ]] && WS_PORT=$((RANDOM % 40001 + 10000))
     echo "端口: $WS_PORT"
-
-    echo ""
-    COMMON_SNI="apple.com"
-    echo "SNI: $COMMON_SNI"
 
     echo ""
     info "配置 Hysteria2"
