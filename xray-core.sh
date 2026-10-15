@@ -262,7 +262,7 @@ write_config() {
         }
       }
     },
-        {
+    {
       "protocol": "hysteria",
       "tag": "HY2-in",
       "listen": "::",
@@ -511,15 +511,15 @@ output_links() {
     echo -e "vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo ""
 
+    echo -e "vless://$UUID@$ip_for_url:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#vless-reality"
+    echo ""
+
     local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI&insecure=1"
     if [[ "${HY2_HOP,,}" == "y" && -n "$HY2_PORTS" ]]; then
         hy2_link="${hy2_link}&mport=$HY2_PORTS&ports=$HY2_PORTS"
     fi
     hy2_link="${hy2_link}#hy2"
     echo -e "$hy2_link"
-    echo ""
-
-    echo -e "vless://$UUID@$ip_for_url:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#vless-reality"
     echo ""
 
     echo -e "${YELLOW}复制链接到客户端即可使用${NC}"
