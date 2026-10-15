@@ -421,7 +421,7 @@ output_links() {
     echo -e "vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo ""
 
-    local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI&insecure=1"
+    local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI"
     if [[ "${HY2_HOP,,}" == "y" && -n "$HY2_PORTS" ]]; then
         hy2_link="${hy2_link}&mport=$HY2_PORTS&ports=$HY2_PORTS"
     fi
@@ -429,7 +429,7 @@ output_links() {
     echo -e "$hy2_link"
     echo ""
 
-    echo -e "anytls://$UUID@$ip_for_url:$ANYTLS_PORT?sni=$COMMON_SNI&insecure=1&alpn=h2&udp=1#anytls"
+    echo -e "anytls://$UUID@$ip_for_url:$ANYTLS_PORT?sni=$COMMON_SNI#anytls"
     echo ""
 
     echo -e "${YELLOW}复制链接到客户端即可使用${NC}"
