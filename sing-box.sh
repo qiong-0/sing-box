@@ -111,7 +111,7 @@ install_singbox() {
     info "下载 sing-box: $download_url"
     wget --no-check-certificate -O /tmp/sing-box.tar.gz "$download_url" || error "下载失败"
     tar -xzf /tmp/sing-box.tar.gz -C /tmp/ || error "解压失败"
-    mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR" "$CERT_DIR" "$REALITY_DIR"
+    mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR" "$CERT_DIR"
     cp "/tmp/sing-box-${version}-linux-${ARCH}/sing-box" "$CORE_BIN"
     chmod +x "$CORE_BIN"
     rm -rf /tmp/sing-box.tar.gz "/tmp/sing-box-${version}-linux-${ARCH}"
@@ -136,25 +136,6 @@ generate_cert() {
     fi
     CERT_FILE="$cert_file"
     KEY_FILE="$key_file"
-}
-
-generate_reality_keys() {
-    local pub_file="$REALITY_DIR/public.key"
-    local priv_file="$REALITY_DIR/private.key"
-    if [ ! -f "$pub_file" ] || [ ! -f "$priv_file" ]; then
-        info "生成 Reality 密钥对..."
-        output=$($CORE_BIN generate reality-keypair)
-        pub=$(echo "$output" | grep "PublicKey" | awk '{print $2}')
-        priv=$(echo "$output" | grep "PrivateKey" | awk '{print $2}')
-        echo "$pub" > "$pub_file"
-        echo "$priv" > "$priv_file"
-        chmod 600 "$pub_file" "$priv_file"
-        ok "Reality 密钥对生成完成"
-    else
-        ok "Reality 密钥对已存在，跳过生成"
-    fi
-    REALITY_PUB=$(cat "$pub_file")
-    REALITY_PRIV=$(cat "$priv_file")
 }
 
 get_config_all() {
@@ -196,11 +177,10 @@ get_config_all() {
     fi
 
     echo ""
-    info "配置 VLESS + Reality"
-    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" REALITY_PORT
-    [[ -z $REALITY_PORT ]] && REALITY_PORT=$((RANDOM % 40001 + 10000))
-    echo "端口: $REALITY_PORT"
-    REALITY_SID=$(openssl rand -hex 2)
+    info "配置 AnyTLS"
+    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" ANYTLS_PORT
+    [[ -z $ANYTLS_PORT ]] && ANYTLS_PORT=$((RANDOM % 40001 + 10000))
+    echo "端口: $ANYTLS_PORT"
     echo ""
 }
 
@@ -212,20 +192,11 @@ write_config() {
         \"server_name\": \"$COMMON_SNI\"
     }"
 
-    local reality_tls="{
+    local anytls_tls="{
         \"enabled\": true,
-        \"server_name\": \"$COMMON_SNI\",
-        \"reality\": {
-            \"enabled\": true,
-            \"handshake\": {
-                \"server\": \"$COMMON_SNI\",
-                \"server_port\": 443
-            },
-            \"private_key\": \"$REALITY_PRIV\",
-            \"short_id\": [
-                \"$REALITY_SID\"
-            ]
-        }
+        \"certificate_path\": \"$CERT_FILE\",
+        \"key_path\": \"$KEY_FILE\",
+        \"server_name\": \"$COMMON_SNI\"
     }"
 
     cat > "$CONFIG_JSON" <<EOF
@@ -263,14 +234,14 @@ write_config() {
       "tls": $hy2_tls
     },
     {
-      "type": "vless",
-      "tag": "VLESS-Reality-in",
+      "type": "anytls",
+      "tag": "AnyTLS-in",
       "listen": "::",
-      "listen_port": $REALITY_PORT,
+      "listen_port": $ANYTLS_PORT,
       "users": [
-        { "uuid": "$UUID", "flow": "xtls-rprx-vision" }
+        { "password": "$UUID" }
       ],
-      "tls": $reality_tls
+      "tls": $anytls_tls
     }
   ],
   "outbounds": [
@@ -475,7 +446,7 @@ output_links() {
     echo -e "vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo ""
 
-    echo -e "vless://$UUID@$ip_for_url:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#vless-reality"
+    echo -e "anytls://$UUID@$ip_for_url:$ANYTLS_PORT?security=tls&sni=$COMMON_SNI&type=tcp&allowInsecure=1#anytls"
     echo ""
 
     local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI"
@@ -496,7 +467,6 @@ main() {
     CONF_DIR="$CORE_DIR/conf"
     LOG_DIR="/var/log/sing-box"
     CERT_DIR="$CORE_DIR/cert"
-    REALITY_DIR="$CORE_DIR/reality"
     CORE_BIN="$CORE_DIR/bin/sing-box"
     CONFIG_JSON="$CORE_DIR/config.json"
 
@@ -508,7 +478,6 @@ main() {
     install_singbox
     get_config_all
     generate_cert
-    generate_reality_keys
     write_config
     setup_iptables
     create_service
