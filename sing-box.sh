@@ -105,7 +105,7 @@ uninstall_old() {
 install_singbox() {
     local latest_url
     latest_url=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
-    [[ -z $latest_url ]] && latest_url="v1.12.1"
+    [[ -z $latest_url ]] && error "无法获取 sing-box 最新版本，请检查网络或 GitHub API 访问"
     local version=${latest_url#v}
     local download_url="https://github.com/SagerNet/sing-box/releases/download/${latest_url}/sing-box-${version}-linux-${ARCH}.tar.gz"
     info "下载 sing-box: $download_url"
