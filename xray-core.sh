@@ -103,19 +103,18 @@ uninstall_old() {
 }
 
 install_xray() {
+    local latest_url
+    latest_url=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
+    [[ -z $latest_url ]] && error "无法获取 Xray 最新版本，请检查网络或 GitHub API 访问"
+    local version=${latest_url#v}
+    local download_url="https://github.com/XTLS/Xray-core/releases/download/${latest_url}/Xray-linux-${ARCH}.zip"
+    info "下载 Xray: $download_url"
+    wget --no-check-certificate -O /tmp/xray.zip "$download_url" || error "下载失败"
+    unzip -o /tmp/xray.zip -d /tmp/xray_extract/ || error "解压失败"
     mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR" "$CERT_DIR" "$REALITY_DIR"
-    ok "下载 Xray-core ..."
-    latest_url=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
-    download_url="https://github.com/XTLS/Xray-core/releases/download/${latest_version}/Xray-linux-${ARCH}.zip"
-    tmp_zip="/tmp/xray.zip"
-    wget -O "$tmp_zip" "$download_url" || curl -L -o "$tmp_zip" "$download_url"
-    if [ ! -f "$tmp_zip" ] || [ ! -s "$tmp_zip" ]; then
-        error "下载 Xray 失败，请检查网络连接"
-    fi
-    unzip -o "$tmp_zip" -d /tmp/xray_extract/
     cp /tmp/xray_extract/xray "$CORE_BIN"
     chmod +x "$CORE_BIN"
-    rm -rf "$tmp_zip" /tmp/xray_extract
+    rm -rf /tmp/xray.zip /tmp/xray_extract
     ok "Xray-core 安装完成: $($CORE_BIN version | head -n1)"
 }
 
