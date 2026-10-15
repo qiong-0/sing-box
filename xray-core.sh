@@ -40,7 +40,7 @@ detect_pkg_manager() {
 }
 
 install_deps() {
-    local deps="wget tar curl unzip openssl"
+    local deps="wget tar curl openssl"
     case $PKG_MANAGER in
         apk) $INSTALL_CMD $deps bash gcompat ;;
         apt) $UPDATE_CMD && $INSTALL_CMD $deps ;;
@@ -73,15 +73,15 @@ get_arch() {
 
 uninstall_old() {
     if [ -d "$CORE_DIR" ]; then
-        warn "检测到已安装的 mihomo，执行卸载..."
+        warn "检测到已安装的 sing-box，执行卸载..."
         if [ "$INIT" = "systemd" ]; then
-            systemctl stop mihomo 2>/dev/null || true
-            systemctl disable mihomo 2>/dev/null || true
-            rm -f /lib/systemd/system/mihomo.service
+            systemctl stop sing-box 2>/dev/null || true
+            systemctl disable sing-box 2>/dev/null || true
+            rm -f /lib/systemd/system/sing-box.service
         elif [ "$INIT" = "openrc" ]; then
-            rc-service mihomo stop 2>/dev/null || true
-            rc-update del mihomo 2>/dev/null || true
-            rm -f /etc/init.d/mihomo
+            rc-service sing-box stop 2>/dev/null || true
+            rc-update del sing-box 2>/dev/null || true
+            rm -f /etc/init.d/sing-box
         fi
         info "删除 iptables 配置文件..."
         rm -rf /etc/iptables
@@ -102,29 +102,20 @@ uninstall_old() {
     fi
 }
 
-install_mihomo() {
+install_singbox() {
+    local latest_url
+    latest_url=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
+    [[ -z $latest_url ]] && error "无法获取 sing-box 最新版本，请检查网络或 GitHub API 访问"
+    local version=${latest_url#v}
+    local download_url="https://github.com/SagerNet/sing-box/releases/download/${latest_url}/sing-box-${version}-linux-${ARCH}.tar.gz"
+    info "下载 sing-box: $download_url"
+    wget --no-check-certificate -O /tmp/sing-box.tar.gz "$download_url" || error "下载失败"
+    tar -xzf /tmp/sing-box.tar.gz -C /tmp/ || error "解压失败"
     mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR" "$CERT_DIR"
-    ok "下载 Mihomo-core ..."
-    latest_version=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-        | grep -o '"tag_name": "[^"]*"' | head -1 | cut -d'"' -f4)
-    [[ -z "$latest_version" ]] && error "无法获取 Mihomo 最新版本"
-
-    local download_url="https://github.com/MetaCubeX/mihomo/releases/download/${latest_version}/mihomo-linux-${ARCH}-${latest_version}.gz"
-    local tmp_gz="/tmp/mihomo.gz"
-
-    info "下载 Mihomo: $download_url"
-    rm -f "$tmp_gz"
-    wget --no-check-certificate -O "$tmp_gz" "$download_url" || error "下载失败"
-
-    if [ ! -s "$tmp_gz" ]; then
-        error "下载 Mihomo 失败，请检查网络连接"
-    fi
-
-    gzip -df "$tmp_gz"
-    mv /tmp/mihomo "$CORE_BIN"
+    cp "/tmp/sing-box-${version}-linux-${ARCH}/sing-box" "$CORE_BIN"
     chmod +x "$CORE_BIN"
-    rm -f "$tmp_gz"
-    ok "Mihomo-core 安装完成: $($CORE_BIN -v | head -n1)"
+    rm -rf /tmp/sing-box.tar.gz "/tmp/sing-box-${version}-linux-${ARCH}"
+    ok "sing-box 安装完成: $($CORE_BIN version | head -n1)"
 }
 
 generate_cert() {
@@ -132,16 +123,11 @@ generate_cert() {
     local key_file="$CERT_DIR/key.pem"
     if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
         info "生成 TLS 证书..."
-        if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-            -keyout "$key_file" -out "$cert_file" -days 3650 -nodes \
-            -subj "/CN=$COMMON_SNI" \
-            -addext "subjectAltName=DNS:$COMMON_SNI" 2>/dev/null; then
+        if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$key_file" -out "$cert_file" -days 3650 -nodes -subj "/CN=$COMMON_SNI" -addext "subjectAltName=DNS:$COMMON_SNI" 2>/dev/null; then
             ok "证书生成完成（含 SAN）"
         else
             warn "openssl 不支持 -addext，使用不含 SAN 的证书（客户端需跳过验证）"
-            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-                -keyout "$key_file" -out "$cert_file" -days 3650 -nodes \
-                -subj "/CN=$COMMON_SNI"
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$key_file" -out "$cert_file" -days 3650 -nodes -subj "/CN=$COMMON_SNI"
         fi
         chmod 600 "$key_file" "$cert_file"
         ok "证书生成完成: $cert_file"
@@ -199,109 +185,74 @@ get_config_all() {
 }
 
 write_config() {
+    local hy2_tls="{
+        \"enabled\": true,
+        \"certificate_path\": \"$CERT_FILE\",
+        \"key_path\": \"$KEY_FILE\",
+        \"server_name\": \"$COMMON_SNI\"
+    }"
+
+    local anytls_tls="{
+        \"enabled\": true,
+        \"certificate_path\": \"$CERT_FILE\",
+        \"key_path\": \"$KEY_FILE\",
+        \"server_name\": \"$COMMON_SNI\"
+    }"
+
     cat > "$CONFIG_JSON" <<EOF
-mixed-port: 7890
-allow-lan: false
-mode: rule
-log-level: warning
-ipv6: true
-
-listeners:
-  - name: vless-ws-in
-    type: vless
-    port: $WS_PORT
-    listen: "::"
-    users:
-      - username: "$UUID"
-        uuid: "$UUID"
-        flow: ""
-    ws-opts:
-      path: "/"
-      headers:
-        Host: "$WS_DOMAIN"
-
-  - name: hy2-in
-    type: hysteria2
-    port: $HY2_PORT
-    listen: "::"
-    users:
-      "$UUID": "$UUID"
-    certificate: "$CERT_FILE"
-    private-key: "$KEY_FILE"
-    obfs: ""
-
-  - name: anytls-in
-    type: anytls
-    port: $ANYTLS_PORT
-    listen: "::"
-    users:
-      "$UUID": "$UUID"
-    certificate: "$CERT_FILE"
-    private-key: "$KEY_FILE"
-
-proxies: []
-
-rules:
-  - MATCH,DIRECT
+{
+  "log": {
+    "level": "error",
+    "output": "/dev/null",
+    "timestamp": false
+  },
+  "inbounds": [
+    {
+      "type": "vless",
+      "tag": "VLESS-WS-in",
+      "listen": "::",
+      "listen_port": $WS_PORT,
+      "users": [
+        { "uuid": "$UUID", "flow": "" }
+      ],
+      "transport": {
+        "type": "ws",
+        "path": "/",
+        "headers": {
+          "Host": "$WS_DOMAIN"
+        }
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "HY2-in",
+      "listen": "::",
+      "listen_port": $HY2_PORT,
+      "users": [
+        { "password": "$UUID" }
+      ],
+      "tls": $hy2_tls
+    },
+    {
+      "type": "anytls",
+      "tag": "AnyTLS-in",
+      "listen": "::",
+      "listen_port": $ANYTLS_PORT,
+      "users": [
+        { "password": "$UUID" }
+      ],
+      "tls": $anytls_tls
+    }
+  ],
+  "outbounds": [
+    { "type": "direct", "tag": "direct" }
+  ]
+}
 EOF
     ok "配置文件已生成: $CONFIG_JSON"
 }
 
-create_service() {
-    if [[ $INIT == "systemd" ]]; then
-        cat > /lib/systemd/system/mihomo.service <<EOF
-[Unit]
-Description=Mihomo Service
-After=network.target
-
-[Service]
-Type=simple
-User=root
-ExecStart=$CORE_BIN -d $CORE_DIR -f $CONFIG_JSON
-Restart=on-failure
-RestartSec=5s
-
-[Install]
-WantedBy=multi-user.target
-EOF
-        systemctl daemon-reload
-        systemctl enable mihomo
-        systemctl start mihomo
-        ok "systemd 服务已启动"
-    else
-        cat > /etc/init.d/mihomo <<'EOF'
-#!/sbin/openrc-run
-name="mihomo"
-description="mihomo proxy service"
-command="CORE_BIN_PLACEHOLDER"
-command_args="-d CORE_DIR_PLACEHOLDER -f CONFIG_JSON_PLACEHOLDER"
-command_user="root"
-pidfile="/run/${RC_SVCNAME}.pid"
-command_background=true
-depend() {
-    need net
-}
-EOF
-        sed -i "s|CORE_BIN_PLACEHOLDER|$CORE_BIN|g" /etc/init.d/mihomo
-        sed -i "s|CORE_DIR_PLACEHOLDER|$CORE_DIR|g" /etc/init.d/mihomo
-        sed -i "s|CONFIG_JSON_PLACEHOLDER|$CONFIG_JSON|g" /etc/init.d/mihomo
-        chmod +x /etc/init.d/mihomo
-        rc-update add mihomo default
-        rc-service mihomo start
-        ok "OpenRC 服务已启动"
-    fi
-
-    sleep 2
-    if [[ $INIT == "systemd" ]] && systemctl is-active --quiet mihomo; then
-        ok "服务运行正常"
-    elif [[ $INIT == "openrc" ]] && rc-service mihomo status | grep -q "started"; then
-        ok "服务运行正常"
-    else
-        warn "服务可能未正常启动，请手动运行 '$CORE_BIN -d $CORE_DIR -f $CONFIG_JSON' 检查错误"
-    fi
-}
-
-setup_hy2_iptables() {
+setup_iptables() {
     [[ "${HY2_HOP,,}" != "y" || -z "$HY2_PORTS" ]] && return 0
 
     local start_port=$(echo "$HY2_PORTS" | cut -d'-' -f1)
@@ -348,6 +299,7 @@ setup_hy2_iptables() {
             systemctl enable iptables-restore 2>/dev/null || true
             systemctl enable ip6tables-restore 2>/dev/null || true
             ok "已保存规则到 /etc/iptables/rules.v4 和 rules.v6"
+            warn "请确保系统启动时自动加载这些文件（例如通过 iptables-restore 服务或 rc.local）"
         fi
     elif [[ "$INIT" == "openrc" ]]; then
         mkdir -p /etc/iptables
@@ -355,10 +307,83 @@ setup_hy2_iptables() {
         if command -v ip6tables &>/dev/null; then
             ip6tables-save > /etc/iptables/rules-save-ip6
         fi
-        [ -f /etc/init.d/iptables ] && rc-update add iptables default 2>/dev/null || true
-        [ -f /etc/init.d/ip6tables ] && rc-update add ip6tables default 2>/dev/null || true
+        if [ -f /etc/init.d/iptables ]; then
+            rc-update add iptables default 2>/dev/null || true
+        fi
+        if [ -f /etc/init.d/ip6tables ]; then
+            rc-update add ip6tables default 2>/dev/null || true
+        fi
         ok "已保存规则到 /etc/iptables/ 并尝试添加启动服务"
+    else
+        warn "未知 init 系统，请手动持久化 iptables 规则"
     fi
+}
+
+create_service() {
+    if [[ $INIT == "systemd" ]]; then
+        cat > /lib/systemd/system/sing-box.service <<EOF
+[Unit]
+Description=sing-box Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=$CORE_BIN run -c $CONFIG_JSON
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
+        systemctl enable sing-box
+        systemctl start sing-box
+        ok "systemd 服务已启动"
+    else
+        cat > /etc/init.d/sing-box <<'EOF'
+#!/sbin/openrc-run
+name="sing-box"
+description="sing-box proxy service"
+command="CORE_BIN_PLACEHOLDER"
+command_args="run -c CONFIG_JSON_PLACEHOLDER"
+command_user="root"
+pidfile="/run/${RC_SVCNAME}.pid"
+command_background=true
+depend() {
+    need net
+}
+EOF
+        sed -i "s|CORE_BIN_PLACEHOLDER|$CORE_BIN|g" /etc/init.d/sing-box
+        sed -i "s|CONFIG_JSON_PLACEHOLDER|$CONFIG_JSON|g" /etc/init.d/sing-box
+        chmod +x /etc/init.d/sing-box
+        rc-update add sing-box default
+        rc-service sing-box start
+        ok "OpenRC 服务已启动"
+    fi
+
+    sleep 2
+    if [[ $INIT == "systemd" ]] && systemctl is-active --quiet sing-box; then
+        ok "服务运行正常"
+    elif [[ $INIT == "openrc" ]] && rc-service sing-box status | grep -q "started"; then
+        ok "服务运行正常"
+    else
+        warn "服务可能未正常启动，请手动运行 '$CORE_BIN run -c $CONFIG_JSON' 检查错误"
+    fi
+}
+
+urlencode() {
+    local string="$1"
+    local encoded=""
+    local i
+    for ((i=0; i<${#string}; i++)); do
+        local char="${string:i:1}"
+        case "$char" in
+            [a-zA-Z0-9.~_-]) encoded+="$char" ;;
+            *) encoded+=$(printf '%%%02X' "'$char") ;;
+        esac
+    done
+    echo "$encoded"
 }
 
 get_public_ip() {
@@ -411,7 +436,7 @@ get_public_ip() {
 
 output_links() {
     echo ""
-    echo -e "${GREEN}节点链接：${NC}"
+    echo -e "${GREEN}节点链接(如果使用vless + ws + cdn 请把端口改成443(security=tls)或80(security=none))：${NC}"
 
     local ip_for_url="$PUBLIC_IP"
     if [[ "$PUBLIC_IP" =~ : ]]; then
@@ -421,6 +446,9 @@ output_links() {
     echo -e "vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo ""
 
+    echo -e "anytls://$UUID@$ip_for_url:$ANYTLS_PORT?security=tls&sni=$COMMON_SNI&type=tcp#anytls"
+    echo ""
+
     local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI"
     if [[ "${HY2_HOP,,}" == "y" && -n "$HY2_PORTS" ]]; then
         hy2_link="${hy2_link}&mport=$HY2_PORTS&ports=$HY2_PORTS"
@@ -428,10 +456,6 @@ output_links() {
     hy2_link="${hy2_link}#hy2"
     echo -e "$hy2_link"
     echo ""
-
-    echo -e "anytls://$UUID@$ip_for_url:$ANYTLS_PORT?sni=$COMMON_SNI#anytls"
-    echo ""
-
     echo -e "${YELLOW}复制链接到客户端即可使用${NC}"
     echo ""
 }
@@ -439,23 +463,23 @@ output_links() {
 main() {
     [[ $EUID -ne 0 ]] && error "请以 root 用户执行（使用 sudo -i）"
 
-    CORE_DIR="/etc/mihomo"
+    CORE_DIR="/etc/sing-box"
     CONF_DIR="$CORE_DIR/conf"
-    LOG_DIR="/var/log/mihomo"
+    LOG_DIR="/var/log/sing-box"
     CERT_DIR="$CORE_DIR/cert"
-    CORE_BIN="$CORE_DIR/bin/mihomo"
-    CONFIG_JSON="$CORE_DIR/config.yaml"
+    CORE_BIN="$CORE_DIR/bin/sing-box"
+    CONFIG_JSON="$CORE_DIR/config.json"
 
     detect_pkg_manager
     install_deps
     get_arch
     detect_init
     uninstall_old
-    install_mihomo
+    install_singbox
     get_config_all
     generate_cert
     write_config
-    setup_hy2_iptables
+    setup_iptables
     create_service
     get_public_ip
     output_links
