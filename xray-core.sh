@@ -64,8 +64,8 @@ detect_init() {
 
 get_arch() {
     case $(uname -m) in
-        x86_64|amd64) ARCH="64" ;;
-        aarch64|arm64) ARCH="arm64-v8a" ;;
+        x86_64|amd64) ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
         *) error "不支持的系统架构: $(uname -m)" ;;
     esac
     ok "系统架构: $ARCH"
@@ -73,15 +73,15 @@ get_arch() {
 
 uninstall_old() {
     if [ -d "$CORE_DIR" ]; then
-        warn "检测到已安装的 xray，执行卸载..."
+        warn "检测到已安装的 mihomo，执行卸载..."
         if [ "$INIT" = "systemd" ]; then
-            systemctl stop xray 2>/dev/null || true
-            systemctl disable xray 2>/dev/null || true
-            rm -f /lib/systemd/system/xray.service
+            systemctl stop mihomo 2>/dev/null || true
+            systemctl disable mihomo 2>/dev/null || true
+            rm -f /lib/systemd/system/mihomo.service
         elif [ "$INIT" = "openrc" ]; then
-            rc-service xray stop 2>/dev/null || true
-            rc-update del xray 2>/dev/null || true
-            rm -f /etc/init.d/xray
+            rc-service mihomo stop 2>/dev/null || true
+            rc-update del mihomo 2>/dev/null || true
+            rm -f /etc/init.d/mihomo
         fi
         info "删除 iptables 配置文件..."
         rm -rf /etc/iptables
@@ -102,64 +102,29 @@ uninstall_old() {
     fi
 }
 
-install_xray() {
-    mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR" "$CERT_DIR" "$REALITY_DIR"
-    ok "下载 Xray-core ..."
-    latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases | grep -o '"tag_name": "[^"]*"'| head -1 | cut -d'"' -f4)
-    download_url="https://github.com/XTLS/Xray-core/releases/download/${latest_version}/Xray-linux-${ARCH}.zip"
-    tmp_zip="/tmp/xray.zip"
-    wget -O "$tmp_zip" "$download_url" || curl -L -o "$tmp_zip" "$download_url"
-    if [ ! -f "$tmp_zip" ] || [ ! -s "$tmp_zip" ]; then
-        error "下载 Xray 失败，请检查网络连接"
-    fi
-    unzip -o "$tmp_zip" -d /tmp/xray_extract/
-    cp /tmp/xray_extract/xray "$CORE_BIN"
-    chmod +x "$CORE_BIN"
-    rm -rf "$tmp_zip" /tmp/xray_extract
-    ok "Xray-core 安装完成: $($CORE_BIN version | head -n1)"
-}
+install_mihomo() {
+    mkdir -p "$CORE_DIR/bin" "$CONF_DIR" "$LOG_DIR" "$CERT_DIR"
+    ok "下载 Mihomo-core ..."
+    latest_version=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+        | grep -o '"tag_name": "[^"]*"' | head -1 | cut -d'"' -f4)
+    [[ -z "$latest_version" ]] && error "无法获取 Mihomo 最新版本"
 
-generate_reality_keys() {
-    local pub_file="$REALITY_DIR/public.key"
-    local priv_file="$REALITY_DIR/private.key"
-    
-    rm -f "$pub_file" "$priv_file"
-    
-    info "生成 Reality 密钥对..."
-    if [ ! -x "$CORE_BIN" ]; then
-        error "Xray 二进制文件不存在或不可执行: $CORE_BIN"
+    local download_url="https://github.com/MetaCubeX/mihomo/releases/download/${latest_version}/mihomo-linux-${ARCH}-${latest_version}.gz"
+    local tmp_gz="/tmp/mihomo.gz"
+
+    info "下载 Mihomo: $download_url"
+    rm -f "$tmp_gz"
+    wget --no-check-certificate -O "$tmp_gz" "$download_url" || error "下载失败"
+
+    if [ ! -s "$tmp_gz" ]; then
+        error "下载 Mihomo 失败，请检查网络连接"
     fi
-    
-    output=$($CORE_BIN x25519 2>/dev/null)
-    if [ -z "$output" ]; then
-        error "执行 $CORE_BIN x25519 失败，请检查 Xray 是否完整安装"
-    fi
-    
-    priv=$(echo "$output" | grep -E 'PrivateKey:' | sed -E 's/.*PrivateKey:\s*//' | tr -d '\r\n')
-    if [ -z "$priv" ]; then
-        priv=$(echo "$output" | grep -E 'Private key:' | sed -E 's/.*Private key:\s*//' | tr -d '\r\n')
-    fi
-    
-    pub=$(echo "$output" | grep -E 'PublicKey:' | sed -E 's/.*PublicKey:\s*//' | tr -d '\r\n')
-    if [ -z "$pub" ]; then
-        pub=$(echo "$output" | grep -E 'Password \(PublicKey\):' | sed -E 's/.*Password \(PublicKey\):\s*//' | tr -d '\r\n')
-    fi
-    if [ -z "$pub" ]; then
-        pub=$(echo "$output" | grep -E 'Public key:' | sed -E 's/.*Public key:\s*//' | tr -d '\r\n')
-    fi
-    
-    if [ -z "$priv" ] || [ -z "$pub" ]; then
-        error "无法从 xray x25519 输出中提取密钥，输出内容：\n$output"
-    fi
-    
-    echo "$priv" > "$priv_file"
-    echo "$pub" > "$pub_file"
-    chmod 600 "$priv_file" "$pub_file"
-    
-    REALITY_PUB=$(cat "$pub_file" | tr -d '\r\n')
-    REALITY_PRIV=$(cat "$priv_file" | tr -d '\r\n')
-    
-    ok "Reality 密钥对生成完成"
+
+    gzip -df "$tmp_gz"
+    mv /tmp/mihomo "$CORE_BIN"
+    chmod +x "$CORE_BIN"
+    rm -f "$tmp_gz"
+    ok "Mihomo-core 安装完成: $($CORE_BIN -v | head -n1)"
 }
 
 generate_cert() {
@@ -226,115 +191,73 @@ get_config_all() {
     fi
 
     echo ""
-    info "配置 VLESS + Reality"
-    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" REALITY_PORT
-    [[ -z $REALITY_PORT ]] && REALITY_PORT=$((RANDOM % 40001 + 10000))
-    echo "端口: $REALITY_PORT"
-    REALITY_SID=$(openssl rand -hex 2)
+    info "配置 AnyTLS"
+    read -p "$(echo -e "${CYAN}端口 (回车随机 10000-50000):${NC} ")" ANYTLS_PORT
+    [[ -z $ANYTLS_PORT ]] && ANYTLS_PORT=$((RANDOM % 40001 + 10000))
+    echo "端口: $ANYTLS_PORT"
     echo ""
 }
 
 write_config() {
     cat > "$CONFIG_JSON" <<EOF
-{
-  "log": {
-  "loglevel": "debug",
-  "access": "/var/log/xray/access.log",
-  "error": "/var/log/xray/error.log"
-  },
-  "inbounds": [
-    {
-      "protocol": "vless",
-      "tag": "VLESS-WS-in",
-      "listen": "::",
-      "port": $WS_PORT,
-      "settings": {
-        "clients": [
-          { "id": "$UUID", "flow": "" }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "ws",
-        "wsSettings": {
-          "path": "/",
-          "host": "$WS_DOMAIN"
-        }
-      }
-    },
-    {
-      "protocol": "hysteria",
-      "tag": "HY2-in",
-      "listen": "::",
-      "port": $HY2_PORT,
-      "settings": {
-        "version": 2,
-        "clients": [
-          { "auth": "$UUID", "level": 0 }
-        ]
-      },
-      "streamSettings": {
-        "network": "hysteria",
-        "security": "tls",
-        "tlsSettings": {
-          "certificates": [
-            {
-              "certificateFile": "$CERT_FILE",
-              "keyFile": "$KEY_FILE"
-            }
-          ],
-          "alpn": ["h3"]
-        },
-        "hysteriaSettings": {
-          "version": 2,
-          "auth": "$UUID"
-        }
-      }
-    },
-    {
-      "protocol": "vless",
-      "tag": "VLESS-Reality-in",
-      "listen": "::",
-      "port": $REALITY_PORT,
-      "settings": {
-        "clients": [
-          { "id": "$UUID", "flow": "xtls-rprx-vision" }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "serverNames": ["$COMMON_SNI"],
-          "serverName": "$COMMON_SNI",
-          "privateKey": "$REALITY_PRIV",
-          "shortIds": ["$REALITY_SID"],
-          "dest": "$COMMON_SNI:443",
-          "xver": 0
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    { "protocol": "direct", "tag": "direct" }
-  ]
-}
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: warning
+ipv6: true
+
+listeners:
+  - name: vless-ws-in
+    type: vless
+    port: $WS_PORT
+    listen: "::"
+    users:
+      - username: "$UUID"
+        uuid: "$UUID"
+        flow: ""
+    ws-opts:
+      path: "/"
+      headers:
+        Host: "$WS_DOMAIN"
+
+  - name: hy2-in
+    type: hysteria2
+    port: $HY2_PORT
+    listen: "::"
+    users:
+      "$UUID": "$UUID"
+    certificate: "$CERT_FILE"
+    private-key: "$KEY_FILE"
+    obfs: ""
+
+  - name: anytls-in
+    type: anytls
+    port: $ANYTLS_PORT
+    listen: "::"
+    users:
+      "$UUID": "$UUID"
+    certificate: "$CERT_FILE"
+    private-key: "$KEY_FILE"
+
+proxies: []
+
+rules:
+  - MATCH,DIRECT
 EOF
     ok "配置文件已生成: $CONFIG_JSON"
 }
 
 create_service() {
     if [[ $INIT == "systemd" ]]; then
-        cat > /lib/systemd/system/xray.service <<EOF
+        cat > /lib/systemd/system/mihomo.service <<EOF
 [Unit]
-Description=xray Service
+Description=Mihomo Service
 After=network.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=$CORE_BIN run -c $CONFIG_JSON
+ExecStart=$CORE_BIN -d $CORE_DIR -f $CONFIG_JSON
 Restart=on-failure
 RestartSec=5s
 
@@ -342,16 +265,16 @@ RestartSec=5s
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        systemctl enable xray
-        systemctl start xray
+        systemctl enable mihomo
+        systemctl start mihomo
         ok "systemd 服务已启动"
     else
-        cat > /etc/init.d/xray <<'EOF'
+        cat > /etc/init.d/mihomo <<'EOF'
 #!/sbin/openrc-run
-name="xray"
-description="xray proxy service"
+name="mihomo"
+description="mihomo proxy service"
 command="CORE_BIN_PLACEHOLDER"
-command_args="run -c CONFIG_JSON_PLACEHOLDER"
+command_args="-d CORE_DIR_PLACEHOLDER -f CONFIG_JSON_PLACEHOLDER"
 command_user="root"
 pidfile="/run/${RC_SVCNAME}.pid"
 command_background=true
@@ -359,21 +282,22 @@ depend() {
     need net
 }
 EOF
-        sed -i "s|CORE_BIN_PLACEHOLDER|$CORE_BIN|g" /etc/init.d/xray
-        sed -i "s|CONFIG_JSON_PLACEHOLDER|$CONFIG_JSON|g" /etc/init.d/xray
-        chmod +x /etc/init.d/xray
-        rc-update add xray default
-        rc-service xray start
+        sed -i "s|CORE_BIN_PLACEHOLDER|$CORE_BIN|g" /etc/init.d/mihomo
+        sed -i "s|CORE_DIR_PLACEHOLDER|$CORE_DIR|g" /etc/init.d/mihomo
+        sed -i "s|CONFIG_JSON_PLACEHOLDER|$CONFIG_JSON|g" /etc/init.d/mihomo
+        chmod +x /etc/init.d/mihomo
+        rc-update add mihomo default
+        rc-service mihomo start
         ok "OpenRC 服务已启动"
     fi
 
     sleep 2
-    if [[ $INIT == "systemd" ]] && systemctl is-active --quiet xray; then
+    if [[ $INIT == "systemd" ]] && systemctl is-active --quiet mihomo; then
         ok "服务运行正常"
-    elif [[ $INIT == "openrc" ]] && rc-service xray status | grep -q "started"; then
+    elif [[ $INIT == "openrc" ]] && rc-service mihomo status | grep -q "started"; then
         ok "服务运行正常"
     else
-        warn "服务可能未正常启动，请手动运行 '$CORE_BIN run -c $CONFIG_JSON' 检查错误"
+        warn "服务可能未正常启动，请手动运行 '$CORE_BIN -d $CORE_DIR -f $CONFIG_JSON' 检查错误"
     fi
 }
 
@@ -437,20 +361,6 @@ setup_hy2_iptables() {
     fi
 }
 
-urlencode() {
-    local string="$1"
-    local encoded=""
-    local i
-    for ((i=0; i<${#string}; i++)); do
-        local char="${string:i:1}"
-        case "$char" in
-            [a-zA-Z0-9.~_-]) encoded+="$char" ;;
-            *) encoded+=$(printf '%%%02X' "'$char") ;;
-        esac
-    done
-    echo "$encoded"
-}
-
 get_public_ip() {
     echo ""
     echo "$(timeout 5 curl -s4 --connect-timeout 2 --max-time 4 -k https://ipinfo.io 2>/dev/null | grep -E '"country"|"city"' | sed -e 's/.*"country": "\(.*\)".*/国家: \1/' -e 's/.*"city": "\(.*\)".*/城市: \1/')"
@@ -501,7 +411,7 @@ get_public_ip() {
 
 output_links() {
     echo ""
-    echo -e "${GREEN}节点链接(如果使用vless + ws + cdn 请把端口改成443(security=tls)或80(security=none))：${NC}"
+    echo -e "${GREEN}节点链接：${NC}"
 
     local ip_for_url="$PUBLIC_IP"
     if [[ "$PUBLIC_IP" =~ : ]]; then
@@ -511,15 +421,15 @@ output_links() {
     echo -e "vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo ""
 
-    echo -e "vless://$UUID@$ip_for_url:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$COMMON_SNI&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID&type=tcp&headerType=none#vless-reality"
-    echo ""
-
-    local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI"
+    local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI&insecure=1"
     if [[ "${HY2_HOP,,}" == "y" && -n "$HY2_PORTS" ]]; then
         hy2_link="${hy2_link}&mport=$HY2_PORTS&ports=$HY2_PORTS"
     fi
     hy2_link="${hy2_link}#hy2"
     echo -e "$hy2_link"
+    echo ""
+
+    echo -e "anytls://$UUID@$ip_for_url:$ANYTLS_PORT?sni=$COMMON_SNI&insecure=1&alpn=h2&udp=1#anytls"
     echo ""
 
     echo -e "${YELLOW}复制链接到客户端即可使用${NC}"
@@ -529,22 +439,20 @@ output_links() {
 main() {
     [[ $EUID -ne 0 ]] && error "请以 root 用户执行（使用 sudo -i）"
 
-    CORE_DIR="/etc/xray"
+    CORE_DIR="/etc/mihomo"
     CONF_DIR="$CORE_DIR/conf"
-    LOG_DIR="/var/log/xray"
+    LOG_DIR="/var/log/mihomo"
     CERT_DIR="$CORE_DIR/cert"
-    REALITY_DIR="$CORE_DIR/reality"
-    CORE_BIN="$CORE_DIR/bin/xray"
-    CONFIG_JSON="$CORE_DIR/config.json"
+    CORE_BIN="$CORE_DIR/bin/mihomo"
+    CONFIG_JSON="$CORE_DIR/config.yaml"
 
     detect_pkg_manager
     install_deps
     get_arch
     detect_init
     uninstall_old
-    install_xray
+    install_mihomo
     get_config_all
-    generate_reality_keys
     generate_cert
     write_config
     setup_hy2_iptables
