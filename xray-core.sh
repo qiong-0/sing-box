@@ -294,6 +294,7 @@ listeners:
     ws-path: "/"
     ws-headers:
       Host: $WS_DOMAIN
+    allow-insecure: true
 
   - name: hy2-in
     type: hysteria2
