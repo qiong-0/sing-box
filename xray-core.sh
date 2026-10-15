@@ -311,8 +311,7 @@ write_config() {
           "privateKey": "$REALITY_PRIV",
           "shortIds": ["$REALITY_SID"],
           "dest": "$COMMON_SNI:443",
-          "xver": 0,
-          "minClientVer": "1.0.0"
+          "xver": 0
         }
       }
     }
