@@ -446,7 +446,7 @@ output_links() {
     echo -e "vless://$UUID@$WS_DOMAIN:$WS_PORT?encryption=none&security=none&type=ws&host=$WS_DOMAIN&path=#vless-ws"
     echo ""
 
-    echo -e "anytls://$UUID@$ip_for_url:$ANYTLS_PORT?security=tls&sni=$COMMON_SNI&type=tcp&allowInsecure=1#anytls"
+    echo -e "anytls://$UUID@$ip_for_url:$ANYTLS_PORT?security=tls&sni=$COMMON_SNI&type=tcp#anytls"
     echo ""
 
     local hy2_link="hysteria2://$UUID@$ip_for_url:$HY2_PORT?security=tls&sni=$COMMON_SNI"
