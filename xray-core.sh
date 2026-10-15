@@ -300,7 +300,7 @@ listeners:
     port: $HY2_PORT
     listen: "::"
     users:
-      - password: $UUID
+      user: $UUID
     certificate: $CERT_FILE
     private-key: $KEY_FILE
     sni: $COMMON_SNI
